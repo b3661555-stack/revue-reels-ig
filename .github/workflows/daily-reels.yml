@@ -33,6 +33,7 @@ jobs:
           INSTAGRAM_USERNAME: ${{ secrets.INSTAGRAM_USERNAME }}
           INSTAGRAM_PASSWORD: ${{ secrets.INSTAGRAM_PASSWORD }}
           PUBMED_EMAIL: ${{ secrets.PUBMED_EMAIL }}
+          IG_SESSION_B64: ${{ secrets.IG_SESSION_B64 }}
         run: python -m src.main
 
       - name: Upload artifacts
