@@ -17,9 +17,7 @@ def synthesize_with_music(text: str, output_path: Path) -> None:
 
     speech_config = speechsdk.SpeechConfig(subscription=key, region=region)
     speech_config.speech_synthesis_voice_name = "fr-FR-VivienneMultilingualNeural"
-    speech_config.set_speech_synthesis_output_to_wav_file(str(output_path))
 
-    # Optional: adjust speech rate for reels (faster)
     speech_rate = os.environ.get("PROSODY_RATE", "0%")
     ssml = f"""<speak version='1.0' xml:lang='fr-FR'>
         <voice xml:lang='fr-FR' name='fr-FR-VivienneMultilingualNeural'>
@@ -27,8 +25,9 @@ def synthesize_with_music(text: str, output_path: Path) -> None:
         </voice>
     </speak>"""
 
+    audio_config = speechsdk.audio.AudioOutputConfig(filename=str(output_path))
     synthesizer = speechsdk.SpeechSynthesizer(
-        speech_config=speech_config, audio_config=None
+        speech_config=speech_config, audio_config=audio_config
     )
 
     try:

@@ -39,7 +39,8 @@ def run() -> None:
     print("[2/6] Gemini text generation...")
     article, reel_text = gemini_writer.write_reel(pm_data)
     print(f"      text length: {len(reel_text)} chars")
-    print(f"      article: {article['title'][:60]}...")
+    if article.get("title"):
+        print(f"      article: {article['title'][:60]}...")
 
     # 3) Fetch scientific image
     print("[3/6] Unsplash image...")

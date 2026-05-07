@@ -1,6 +1,52 @@
-"""Assemble vertical reel video using MoviePy (image + text + audio)."""
+"""Assemble vertical reel video using MoviePy (image + text via Pillow)."""
 from pathlib import Path
-from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip, TextClip
+import textwrap
+from PIL import Image, ImageDraw, ImageFont
+import PIL.Image
+if not hasattr(PIL.Image, "ANTIALIAS"):
+    PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
+from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip
+
+
+def _compose_frame(image_path: Path, text: str) -> str:
+    """Create 1080x1920 image with text overlay, return temp path."""
+    img = Image.open(image_path).convert("RGB")
+
+    # Scale to fill 1080x1920
+    target_w, target_h = 1080, 1920
+    scale = max(target_w / img.width, target_h / img.height)
+    img = img.resize((int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
+
+    # Center crop
+    left = (img.width - target_w) // 2
+    top = (img.height - target_h) // 2
+    img = img.crop((left, top, left + target_w, top + target_h))
+
+    # Semi-transparent overlay at bottom
+    overlay = Image.new("RGBA", (target_w, 500), (0, 0, 0, 160))
+    img = img.convert("RGBA")
+    img.paste(overlay, (0, target_h - 500), overlay)
+
+    # Draw text
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 46)
+    except OSError:
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 46)
+        except OSError:
+            font = ImageFont.load_default()
+
+    wrapped = textwrap.fill(text, width=30)
+    bbox = draw.textbbox((0, 0), wrapped, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    x = (target_w - tw) // 2
+    y = target_h - 450 + (400 - th) // 2
+    draw.text((x, y), wrapped, font=font, fill="white")
+
+    out = str(image_path).replace(".jpg", "_composed.png")
+    img.convert("RGB").save(out)
+    return out
 
 
 def assemble_reel(
@@ -10,41 +56,17 @@ def assemble_reel(
     output_path: Path,
     duration: float = 45.0,
 ) -> None:
-    """
-    Create a vertical Instagram Reel (9:16 aspect, ~45s duration).
-    Layers: image + text overlay + audio.
-    """
+    """Create a vertical Instagram Reel (9:16 aspect, ~45s duration)."""
     try:
-        # Load audio to get exact duration
         audio = AudioFileClip(str(audio_path))
-        duration = min(audio.duration, 59.0)  # Max 59s for IG Reels
+        duration = min(audio.duration, 59.0)
 
-        # Image clip (scaled to 1080x1920, center-cropped)
-        img = ImageClip(str(image_path))
-        img = img.resize(height=1920)
-        if img.w > 1080:
-            img = img.crop(width=1080)
-        elif img.w < 1080:
-            img = img.resize(width=1080)
-        img = img.set_duration(duration)
+        composed = _compose_frame(image_path, text)
+        img = ImageClip(composed).set_duration(duration)
 
-        # Text overlay (bottom 1/3 of video)
-        txt_clip = TextClip(
-            text,
-            fontsize=48,
-            color="white",
-            method="caption",
-            size=(1000, 400),
-            font="Arial",
-            align="center",
-        )
-        txt_clip = txt_clip.set_position(("center", "bottom")).set_duration(duration)
-
-        # Composite: image + text
-        video = CompositeVideoClip([img, txt_clip])
+        video = CompositeVideoClip([img])
         video = video.set_audio(audio)
 
-        # Write to file
         video.write_videofile(
             str(output_path),
             fps=30,

@@ -1,7 +1,7 @@
 """Generate short engaging text for Instagram Reels using Google Gemini."""
 import os
 import random
-import google.generativeai as genai
+from google import genai
 
 
 def write_reel(articles: list[dict]) -> tuple[dict, str]:
@@ -17,8 +17,7 @@ def write_reel(articles: list[dict]) -> tuple[dict, str]:
     if not api_key:
         return article, "Latest scientific discovery."
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    client = genai.Client(api_key=api_key)
 
     prompt = f"""
     Generate a short, engaging Instagram Reel script (30-50 words) about this article:
@@ -33,9 +32,11 @@ def write_reel(articles: list[dict]) -> tuple[dict, str]:
     """
 
     try:
-        response = model.generate_content(prompt)
-        text = response.text.strip()
-        return article, text
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=prompt,
+        )
+        return article, response.text.strip()
     except Exception as e:
         print(f"Gemini error: {e}")
-        return article, f"Découvrez cette nouvelle scientifique fascinante."
+        return article, "Découverte scientifique fascinante."
