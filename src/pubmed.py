@@ -1,7 +1,6 @@
 """Fetch recent PubMed articles for reel content."""
 import os
 from datetime import datetime, timedelta
-from urllib.parse import urlencode
 import requests
 
 
@@ -14,32 +13,57 @@ def gather_all(days_back: int = 3) -> list[dict]:
     date_to = datetime.now().strftime("%Y/%m/%d")
 
     query = (
-        "(Nature OR Science OR Cell OR Lancet OR \"NEJM\") "
-        f"AND (\"{date_from}\"[PDAT] : \"{date_to}\"[PDAT])"
+        '("Nature"[Journal] OR "Science"[Journal] OR "Cell"[Journal] '
+        'OR "Lancet"[Journal] OR "N Engl J Med"[Journal]) '
+        f'AND ("{date_from}"[PDAT] : "{date_to}"[PDAT])'
     )
 
-    params = {
-        "db": "pubmed",
-        "term": query,
-        "retmax": 50,
-        "rettype": "json",
-        "email": email,
-    }
-
     try:
-        resp = requests.get(f"{base_url}/esearch.fcgi", params=params, timeout=10)
+        resp = requests.get(f"{base_url}/esearch.fcgi", params={
+            "db": "pubmed",
+            "term": query,
+            "retmax": 20,
+            "retmode": "json",
+            "email": email,
+        }, timeout=15)
         resp.raise_for_status()
-        data = resp.json()
+        ids = resp.json().get("esearchresult", {}).get("idlist", [])
+        if not ids:
+            return []
+
+        # Fetch titles via esummary
+        resp2 = requests.get(f"{base_url}/esummary.fcgi", params={
+            "db": "pubmed",
+            "id": ",".join(ids[:10]),
+            "retmode": "json",
+            "email": email,
+        }, timeout=15)
+        resp2.raise_for_status()
+        result = resp2.json().get("result", {})
 
         articles = []
-        ids = data.get("esearchresult", {}).get("idlist", [])
-        for pmid in ids[:5]:  # Limit to 5 for reel
+        for pmid in ids[:10]:
+            info = result.get(pmid, {})
             articles.append({
                 "pmid": pmid,
-                "title": f"Article {pmid}",
-                "topic": "science",
+                "title": info.get("title", f"Article {pmid}"),
+                "topic": _extract_topic(info.get("source", "")),
             })
         return articles
     except Exception as e:
         print(f"PubMed error: {e}")
         return []
+
+
+def _extract_topic(source: str) -> str:
+    source_lower = source.lower()
+    for journal, topic in [
+        ("nature", "biology"),
+        ("science", "science"),
+        ("cell", "cell biology"),
+        ("lancet", "medicine"),
+        ("n engl j med", "medicine"),
+    ]:
+        if journal in source_lower:
+            return topic
+    return "science"
