@@ -33,7 +33,7 @@ def write_reel(articles: list[dict]) -> tuple[dict, str]:
 
     try:
         response = client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-2.0-flash",
             contents=prompt,
         )
         return article, response.text.strip()

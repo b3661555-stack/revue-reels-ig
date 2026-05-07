@@ -61,11 +61,19 @@ def run() -> None:
         video.assemble_reel(image_path, audio_path, reel_text, reel_path)
         print(f"      video ready: {reel_path.name}")
 
+        # Copy to workspace root for GH Actions artifact
+        import shutil
+        final_reel = Path(f"reel_{today_iso}.mp4")
+        shutil.copy2(reel_path, final_reel)
+
         # 6) Post to Instagram
         print("[6/6] Instagram posting...")
         if os.environ.get("INSTAGRAM_USERNAME"):
-            instagram.post_reel(reel_path, reel_text)
-            print(f"      posted to @{os.environ.get('INSTAGRAM_USERNAME')}")
+            try:
+                instagram.post_reel(reel_path, reel_text)
+                print(f"      posted to @{os.environ.get('INSTAGRAM_USERNAME')}")
+            except Exception as e:
+                print(f"      [instagram] FAILED (non-fatal): {e}")
         else:
             print("[instagram] INSTAGRAM_USERNAME not set, skip")
 
