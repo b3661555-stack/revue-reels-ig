@@ -1,11 +1,12 @@
-"""Fetch recent PubMed articles with full metadata and optional PMC figures."""
+"""Fetch PubMed articles with abstract, metadata, and PMC figure URLs."""
 import os
+import re
 from datetime import datetime, timedelta
+import xml.etree.ElementTree as ET
 import requests
 
 
 def gather_all(days_back: int = 3) -> list[dict]:
-    """Fetch recent articles from PubMed with rich metadata."""
     email = os.environ.get("PUBMED_EMAIL", "revue@example.com")
     base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
@@ -19,6 +20,7 @@ def gather_all(days_back: int = 3) -> list[dict]:
     )
 
     try:
+        # Search
         resp = requests.get(f"{base}/esearch.fcgi", params={
             "db": "pubmed", "term": query, "retmax": 20,
             "retmode": "json", "email": email,
@@ -28,20 +30,29 @@ def gather_all(days_back: int = 3) -> list[dict]:
         if not ids:
             return []
 
+        # Summary (title, journal, authors, date)
         resp2 = requests.get(f"{base}/esummary.fcgi", params={
             "db": "pubmed", "id": ",".join(ids[:10]),
             "retmode": "json", "email": email,
         }, timeout=15)
         resp2.raise_for_status()
-        result = resp2.json().get("result", {})
+        summary = resp2.json().get("result", {})
+
+        # Abstracts (XML)
+        resp3 = requests.get(f"{base}/efetch.fcgi", params={
+            "db": "pubmed", "id": ",".join(ids[:10]),
+            "rettype": "abstract", "retmode": "xml", "email": email,
+        }, timeout=20)
+        abstracts = _parse_abstracts(resp3.text) if resp3.status_code == 200 else {}
 
         articles = []
         for pmid in ids[:10]:
-            info = result.get(pmid, {})
+            info = summary.get(pmid, {})
             authors = info.get("authors", [])
-            author_str = authors[0].get("name", "") if authors else ""
-            if len(authors) > 1:
-                author_str += f" et al."
+            author_names = [a.get("name", "") for a in authors[:3]]
+            author_str = ", ".join(author_names)
+            if len(authors) > 3:
+                author_str += " et al."
 
             articles.append({
                 "pmid": pmid,
@@ -49,12 +60,13 @@ def gather_all(days_back: int = 3) -> list[dict]:
                 "authors": author_str,
                 "journal": info.get("source", ""),
                 "date": info.get("pubdate", ""),
+                "abstract": abstracts.get(pmid, ""),
                 "topic": _extract_topic(info.get("source", "")),
                 "figure_urls": [],
             })
 
-        # Try to get PMC figures for top articles
-        for art in articles[:3]:
+        # Fetch PMC figures for top articles
+        for art in articles[:5]:
             art["figure_urls"] = _fetch_pmc_figures(art["pmid"], email)
 
         return articles
@@ -63,9 +75,35 @@ def gather_all(days_back: int = 3) -> list[dict]:
         return []
 
 
-def _fetch_pmc_figures(pmid: str, email: str) -> list[str]:
-    """Try to fetch figure URLs from PMC open access."""
+def _parse_abstracts(xml_text: str) -> dict[str, str]:
+    """Parse efetch XML to extract abstracts keyed by PMID."""
+    result = {}
     try:
+        root = ET.fromstring(xml_text)
+        for article in root.findall(".//PubmedArticle"):
+            pmid_el = article.find(".//PMID")
+            if pmid_el is None:
+                continue
+            pmid = pmid_el.text
+
+            abstract_parts = []
+            for text_el in article.findall(".//AbstractText"):
+                label = text_el.get("Label", "")
+                text = "".join(text_el.itertext()).strip()
+                if label:
+                    abstract_parts.append(f"{label}: {text}")
+                else:
+                    abstract_parts.append(text)
+            result[pmid] = " ".join(abstract_parts)
+    except Exception:
+        pass
+    return result
+
+
+def _fetch_pmc_figures(pmid: str, email: str) -> list[str]:
+    """Fetch figure image URLs from PMC if article is open access."""
+    try:
+        # Convert PMID → PMCID
         resp = requests.get(
             "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
             params={"ids": pmid, "format": "json", "email": email},
@@ -77,36 +115,52 @@ def _fetch_pmc_figures(pmid: str, email: str) -> list[str]:
             return []
 
         pmcid = records[0]["pmcid"]
-        oa_resp = requests.get(
-            "https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi",
-            params={"id": pmcid, "format": "json"},
-            timeout=10,
-        )
-        if oa_resp.status_code != 200:
-            return []
 
-        # Try to get figure images from PMC
-        fig_resp = requests.get(
+        # Fetch PMC article page for figure URLs
+        resp2 = requests.get(
             f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/",
-            headers={"Accept": "text/html"},
-            timeout=10,
+            headers={"User-Agent": "RevueReelsBot/1.0 (mailto:{email})"},
+            timeout=15,
         )
-        if fig_resp.status_code != 200:
+        if resp2.status_code != 200:
             return []
 
-        # Extract figure image URLs from HTML
-        import re
-        fig_urls = re.findall(
-            r'https://www\.ncbi\.nlm\.nih\.gov/pmc/articles/PMC\d+/bin/[^"]+\.jpg',
-            fig_resp.text
+        # Extract full-size figure URLs
+        urls = []
+        # Pattern 1: /pmc/articles/PMCxxxx/bin/xxx.jpg
+        urls += re.findall(
+            rf'https://www\.ncbi\.nlm\.nih\.gov/pmc/articles/{pmcid}/bin/[^"\']+\.(?:jpg|png|gif)',
+            resp2.text
         )
-        return fig_urls[:3]
+        # Pattern 2: /core/lw/xxx/PMCxxxx/figure/xxx
+        urls += re.findall(
+            rf'https://[^"\']*?/pmc/articles/{pmcid}/figure/[^"\']+',
+            resp2.text
+        )
+        # Pattern 3: CDN figure images
+        urls += re.findall(
+            r'https://cdn\.ncbi\.nlm\.nih\.gov/pmc/articleimages/[^"\']+\.(?:jpg|png)',
+            resp2.text
+        )
+
+        # Deduplicate, prefer larger images
+        seen = set()
+        unique = []
+        for u in urls:
+            key = u.split("/")[-1].split("?")[0]
+            if key not in seen:
+                seen.add(key)
+                unique.append(u)
+
+        if unique:
+            print(f"  PMC figures for {pmcid}: {len(unique)} found")
+        return unique[:5]
     except Exception:
         return []
 
 
 def _extract_topic(source: str) -> str:
-    source_lower = source.lower()
+    s = source.lower()
     for journal, topic in [
         ("nature", "biology research"),
         ("science", "scientific discovery"),
@@ -114,6 +168,6 @@ def _extract_topic(source: str) -> str:
         ("lancet", "medicine health"),
         ("n engl j med", "clinical medicine"),
     ]:
-        if journal in source_lower:
+        if journal in s:
             return topic
     return "science"

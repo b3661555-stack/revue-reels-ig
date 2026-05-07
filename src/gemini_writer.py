@@ -1,4 +1,4 @@
-"""Generate structured multi-scene reel script using Google Gemini."""
+"""Generate detailed multi-scene reel script using Google Gemini (English)."""
 import json
 import os
 import random
@@ -8,45 +8,57 @@ from google import genai
 
 def write_reel(articles: list[dict]) -> tuple[dict, list[dict]]:
     """
-    Pick one article and generate structured scenes.
-    Returns (article, scenes) where each scene is:
-      {"text": str, "image_query": str, "type": str}
+    Pick one article and generate detailed scene breakdown.
+    Returns (article, scenes) where each scene has text + image_query + type.
     """
     if not articles:
         return {}, _fallback_scenes({})
 
-    article = random.choice(articles)
+    # Prefer articles with abstracts and figures
+    ranked = sorted(articles, key=lambda a: (
+        len(a.get("abstract", "")) > 100,
+        len(a.get("figure_urls", [])) > 0,
+    ), reverse=True)
+    article = ranked[0]
+
     api_key = os.environ.get("GOOGLE_AI_STUDIO_API_KEY")
     if not api_key:
         return article, _fallback_scenes(article)
 
     client = genai.Client(api_key=api_key)
+    abstract = article.get("abstract", "")[:2000]
 
-    prompt = f"""Generate a structured Instagram Reel script about this scientific article.
+    prompt = f"""You are a science communicator creating an Instagram Reel script.
+
+ARTICLE:
 Title: {article.get('title', 'Unknown')}
 Journal: {article.get('journal', '')}
 Authors: {article.get('authors', '')}
+Abstract: {abstract}
 
-Return ONLY a JSON array of 4-5 scenes. Each scene has:
-- "text": the narration text in French (15-30 words per scene)
-- "image_query": English search term for a background image
-- "type": one of "hook", "context", "finding", "significance", "cta"
+Generate a JSON array of 5-6 scenes for a 30-45 second reel that explains this study.
 
-Example format:
-[
-  {{"text": "Et si votre cerveau pouvait apprendre même en dormant ?", "image_query": "brain neurons glowing", "type": "hook"}},
-  {{"text": "Des chercheurs de Nature viennent de montrer que...", "image_query": "laboratory scientist microscope", "type": "context"}},
-  {{"text": "Ils ont découvert que les neurones continuent...", "image_query": "neural network abstract", "type": "finding"}},
-  {{"text": "Cela pourrait révolutionner le traitement de...", "image_query": "medical innovation future", "type": "significance"}},
-  {{"text": "Suivez-nous pour plus de science au quotidien.", "image_query": "science aesthetic minimal", "type": "cta"}}
-]
+Each scene must have:
+- "text": narration text in English (20-35 words per scene)
+- "image_query": English search term for background image (scientific, visual)
+- "type": one of "hook", "background", "method", "finding", "impact", "cta"
+
+Structure:
+1. HOOK: Surprising question or bold statement about the finding
+2. BACKGROUND: What problem were researchers trying to solve?
+3. METHOD: How did they approach it? (simplified for general audience)
+4. FINDING: What did they discover? (the key result)
+5. IMPACT: Why does this matter? Real-world implications
+6. CTA: Follow for more daily science
 
 Rules:
-- French language for text
-- No hashtags, no emojis
-- Hook must be a question or surprising statement
-- Keep it accessible, no jargon
-- image_query in English for Unsplash search"""
+- English only
+- No jargon — explain like the audience is curious but not expert
+- Each scene should stand alone visually
+- Be specific about the findings, not generic
+- image_query should be vivid and specific
+
+Return ONLY the JSON array, no markdown."""
 
     for attempt in range(3):
         try:
@@ -55,13 +67,12 @@ Rules:
                 contents=prompt,
             )
             raw = response.text.strip()
-            # Extract JSON from response
             if "```" in raw:
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):
                     raw = raw[4:]
             scenes = json.loads(raw)
-            if isinstance(scenes, list) and len(scenes) >= 3:
+            if isinstance(scenes, list) and len(scenes) >= 4:
                 return article, scenes
         except Exception as e:
             print(f"Gemini attempt {attempt + 1}/3: {e}")
@@ -73,32 +84,81 @@ Rules:
 
 
 def _fallback_scenes(article: dict) -> list[dict]:
-    """Build structured scenes from article metadata."""
+    """Build detailed scenes from article metadata + abstract."""
     title = article.get("title", "")
     journal = article.get("journal", "")
+    authors = article.get("authors", "")
+    abstract = article.get("abstract", "")
     topic = article.get("topic", "science")
 
     hooks = [
-        "Et si cette découverte changeait tout ?",
-        "La science vient de franchir un nouveau cap.",
-        "Vous n'allez pas croire cette nouvelle étude.",
-        "Une avancée qui pourrait tout transformer.",
+        "What if one study could change everything we know?",
+        "Scientists just made a breakthrough you need to hear about.",
+        "This discovery might reshape an entire field.",
+        "A new study is challenging what we thought was true.",
     ]
 
-    if title and not title.startswith("Article "):
-        short_title = title[:100].rstrip(".")
-        journal_mention = f"Publiée dans {journal}, " if journal else ""
+    if not title or title.startswith("Article "):
         return [
-            {"text": random.choice(hooks), "image_query": f"{topic} abstract", "type": "hook"},
-            {"text": f"{journal_mention}une équipe de chercheurs a fait une découverte majeure.", "image_query": "scientific laboratory research", "type": "context"},
-            {"text": f"{short_title}.", "image_query": f"{topic} close up", "type": "finding"},
-            {"text": "Une avancée qui pourrait transformer notre compréhension.", "image_query": "innovation future technology", "type": "significance"},
-            {"text": "Abonnez-vous pour la science au quotidien.", "image_query": "science aesthetic minimal", "type": "cta"},
+            {"text": random.choice(hooks), "image_query": "science abstract", "type": "hook"},
+            {"text": "New research is pushing the boundaries of what we know.", "image_query": "research lab modern", "type": "background"},
+            {"text": "The findings could have far-reaching implications.", "image_query": "scientific breakthrough", "type": "finding"},
+            {"text": "Follow for your daily dose of science.", "image_query": "science aesthetic", "type": "cta"},
         ]
 
-    return [
-        {"text": random.choice(hooks), "image_query": "science abstract colorful", "type": "hook"},
-        {"text": "Chaque jour, la recherche fait des pas de géant.", "image_query": "research laboratory modern", "type": "context"},
-        {"text": "De nouvelles découvertes changent notre vision du monde.", "image_query": "scientific breakthrough", "type": "finding"},
-        {"text": "Suivez-nous pour ne rien manquer.", "image_query": "science aesthetic minimal", "type": "cta"},
+    short_title = title[:150].rstrip(".")
+    scenes = [
+        {"text": random.choice(hooks), "image_query": f"{topic} abstract dark", "type": "hook"},
+        {
+            "text": f"Published in {journal}, a team led by {authors.split(',')[0] if authors else 'researchers'} investigated a critical question.",
+            "image_query": "scientific journal publication",
+            "type": "background",
+        },
     ]
+
+    # Try to extract method and finding from abstract
+    if len(abstract) > 100:
+        sentences = [s.strip() for s in abstract.replace(". ", ".\n").split("\n") if len(s.strip()) > 20]
+        if len(sentences) >= 3:
+            scenes.append({
+                "text": _shorten(sentences[len(sentences) // 2], 120),
+                "image_query": f"{topic} laboratory experiment",
+                "type": "method",
+            })
+            scenes.append({
+                "text": _shorten(sentences[-1], 120),
+                "image_query": f"{topic} results data",
+                "type": "finding",
+            })
+        else:
+            scenes.append({
+                "text": f"Their study: {short_title}.",
+                "image_query": f"{topic} close up detail",
+                "type": "finding",
+            })
+    else:
+        scenes.append({
+            "text": f"Their study: {short_title}.",
+            "image_query": f"{topic} close up detail",
+            "type": "finding",
+        })
+
+    scenes.append({
+        "text": "This could open new doors for research and real-world applications.",
+        "image_query": "innovation future science",
+        "type": "impact",
+    })
+    scenes.append({
+        "text": "Follow for your daily science breakdown.",
+        "image_query": "science aesthetic minimal dark",
+        "type": "cta",
+    })
+
+    return scenes
+
+
+def _shorten(text: str, max_len: int) -> str:
+    if len(text) <= max_len:
+        return text
+    cut = text[:max_len].rsplit(" ", 1)[0]
+    return cut.rstrip(",.;:") + "."

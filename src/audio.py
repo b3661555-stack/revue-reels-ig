@@ -1,14 +1,13 @@
-"""Synthesize audio narration via Azure TTS + mix with background music."""
+"""Synthesize English audio narration via Azure TTS."""
 import os
 from pathlib import Path
 import azure.cognitiveservices.speech as speechsdk
 
 
+VOICE = os.environ.get("AZURE_VOICE_NAME", "en-US-AvaMultilingualNeural")
+
+
 def synthesize_with_music(text: str, output_path: Path) -> None:
-    """
-    Synthesize text using Azure TTS (Vivienne voice) and save as WAV.
-    Background music mixing can be added later in MoviePy.
-    """
     key = os.environ.get("AZURE_TTS_KEY")
     region = os.environ.get("AZURE_TTS_REGION", "eastus")
 
@@ -16,11 +15,11 @@ def synthesize_with_music(text: str, output_path: Path) -> None:
         raise ValueError("AZURE_TTS_KEY not set")
 
     speech_config = speechsdk.SpeechConfig(subscription=key, region=region)
-    speech_config.speech_synthesis_voice_name = "fr-FR-VivienneMultilingualNeural"
+    speech_config.speech_synthesis_voice_name = VOICE
 
-    speech_rate = os.environ.get("PROSODY_RATE", "0%")
-    ssml = f"""<speak version='1.0' xml:lang='fr-FR'>
-        <voice xml:lang='fr-FR' name='fr-FR-VivienneMultilingualNeural'>
+    speech_rate = os.environ.get("PROSODY_RATE", "-5%")
+    ssml = f"""<speak version='1.0' xml:lang='en-US'>
+        <voice xml:lang='en-US' name='{VOICE}'>
             <prosody rate='{speech_rate}'>{text}</prosody>
         </voice>
     </speak>"""

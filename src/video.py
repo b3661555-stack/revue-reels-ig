@@ -1,4 +1,4 @@
-"""Multi-scene vertical reel with Ken Burns, article info, transitions."""
+"""Multi-scene vertical reel: Ken Burns, article info bar, transitions."""
 from pathlib import Path
 import textwrap
 import numpy as np
@@ -34,7 +34,6 @@ def _get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
 
 
 def _prepare_image(image_path: Path) -> np.ndarray:
-    """Scale/crop to fill target + zoom margin."""
     img = Image.open(image_path).convert("RGB")
     m = 1 + ZOOM
     w, h = int(TARGET_W * m), int(TARGET_H * m)
@@ -62,6 +61,12 @@ def _draw_gradient(draw: ImageDraw.Draw, y_start: int, height: int, max_alpha: i
         draw.line([(0, y), (TARGET_W, y)], fill=(0, 0, 0, alpha))
 
 
+def _draw_top_gradient(draw: ImageDraw.Draw, height: int, max_alpha: int = 180):
+    for y in range(height):
+        alpha = int(max_alpha * (height - y) / height)
+        draw.line([(0, y), (TARGET_W, y)], fill=(0, 0, 0, alpha))
+
+
 def _render_scene_frame(
     bg_frame: np.ndarray,
     text: str,
@@ -72,44 +77,64 @@ def _render_scene_frame(
     overlay = Image.new("RGBA", (TARGET_W, TARGET_H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    # Gradient at bottom
-    _draw_gradient(draw, TARGET_H - 700, 700, max_alpha=210)
+    # Bottom gradient for text
+    _draw_gradient(draw, TARGET_H - 750, 750, max_alpha=220)
 
-    # Article info bar at top for first scene
-    if scene_type == "hook" and article_info:
-        _draw_gradient(draw, 0, 200, max_alpha=160)
-        # Flip the top gradient
-        for y in range(200):
-            alpha = int(160 * (200 - y) / 200)
-            draw.line([(0, y), (TARGET_W, y)], fill=(0, 0, 0, alpha))
+    # Article info bar — always show on every scene
+    if article_info and article_info.get("journal"):
+        _draw_top_gradient(draw, 220, max_alpha=180)
 
-        font_sm = _get_font(32)
-        font_journal = _get_font(38, bold=True)
-        journal = article_info.get("journal", "")
+        font_journal = _get_font(36, bold=True)
+        font_meta = _get_font(28)
+
+        journal = article_info["journal"].upper()
         authors = article_info.get("authors", "")
         date = article_info.get("date", "")
 
-        if journal:
-            draw.text((60, 60), journal.upper(), font=font_journal, fill=(255, 255, 255, 230))
-        if authors:
-            draw.text((60, 110), authors, font=font_sm, fill=(200, 200, 200, 200))
-        if date:
-            draw.text((60, 150), date, font=font_sm, fill=(180, 180, 180, 180))
+        # Journal name
+        draw.text((60, 55), journal, font=font_journal, fill=(255, 255, 255, 240))
+        # Authors + date line
+        meta_line = f"{authors}  |  {date}" if authors and date else (authors or date)
+        if meta_line:
+            draw.text((60, 100), meta_line, font=font_meta, fill=(200, 200, 200, 210))
+
+        # Scene type badge
+        badges = {
+            "hook": "THE QUESTION",
+            "background": "BACKGROUND",
+            "method": "THE APPROACH",
+            "finding": "KEY FINDING",
+            "impact": "WHY IT MATTERS",
+            "cta": "FOLLOW FOR MORE",
+        }
+        badge_text = badges.get(scene_type, "")
+        if badge_text:
+            font_badge = _get_font(24, bold=True)
+            badge_w = draw.textlength(badge_text, font=font_badge) + 30
+            badge_x = 60
+            badge_y = 155
+            draw.rounded_rectangle(
+                [badge_x, badge_y, badge_x + badge_w, badge_y + 36],
+                radius=4,
+                fill=(255, 100, 50, 200),
+            )
+            draw.text((badge_x + 15, badge_y + 5), badge_text, font=font_badge, fill="white")
 
     img = Image.alpha_composite(img, overlay)
     draw = ImageDraw.Draw(img)
 
     # Main text
-    font_size = 56 if scene_type in ("hook", "finding") else 48
-    font = _get_font(font_size, bold=(scene_type == "hook"))
-    wrapped = textwrap.fill(text, width=24)
+    font_size = 54 if scene_type in ("hook", "finding") else 46
+    font = _get_font(font_size, bold=(scene_type in ("hook", "finding")))
+    wrapped = textwrap.fill(text, width=26)
     bbox = draw.textbbox((0, 0), wrapped, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     x = (TARGET_W - tw) // 2
-    y = TARGET_H - th - 250
+    y = TARGET_H - th - 220
 
-    # Shadow
-    draw.text((x + 3, y + 3), wrapped, font=font, fill=(0, 0, 0, 180))
+    # Shadow + text
+    for dx, dy in [(3, 3), (2, 2), (1, 1)]:
+        draw.text((x + dx, y + dy), wrapped, font=font, fill=(0, 0, 0, 150))
     draw.text((x, y), wrapped, font=font, fill="white")
 
     return np.array(img.convert("RGB"))
@@ -145,17 +170,16 @@ def assemble_reel(
     """Create multi-scene vertical Instagram Reel."""
     try:
         audio = AudioFileClip(str(audio_path))
-        total_dur = min(audio.duration + 1.0, 59.0)
+        total_dur = min(audio.duration + 1.5, 59.0)
         n_scenes = len(scenes)
         per_scene = total_dur / n_scenes
 
         clips = []
         for i, scene in enumerate(scenes):
             img_path = scene_images[i] if i < len(scene_images) else scene_images[-1]
-            info = article_info if i == 0 else None
             clip = _build_scene_clip(
                 img_path, scene["text"], per_scene,
-                scene.get("type", "context"), info,
+                scene.get("type", "context"), article_info,
             )
             clips.append(clip)
 
