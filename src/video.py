@@ -1,52 +1,83 @@
-"""Assemble vertical reel video using MoviePy (image + text via Pillow)."""
+"""Assemble vertical reel video with Ken Burns effect and text overlay."""
 from pathlib import Path
 import textwrap
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 import PIL.Image
 if not hasattr(PIL.Image, "ANTIALIAS"):
     PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
-from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip
+from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip, concatenate_videoclips
 
 
-def _compose_frame(image_path: Path, text: str) -> str:
-    """Create 1080x1920 image with text overlay, return temp path."""
-    img = Image.open(image_path).convert("RGB")
+TARGET_W, TARGET_H = 1080, 1920
+ZOOM_FACTOR = 0.15
 
-    # Scale to fill 1080x1920
-    target_w, target_h = 1080, 1920
-    scale = max(target_w / img.width, target_h / img.height)
-    img = img.resize((int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
 
-    # Center crop
-    left = (img.width - target_w) // 2
-    top = (img.height - target_h) // 2
-    img = img.crop((left, top, left + target_w, top + target_h))
-
-    # Semi-transparent overlay at bottom
-    overlay = Image.new("RGBA", (target_w, 500), (0, 0, 0, 160))
-    img = img.convert("RGBA")
-    img.paste(overlay, (0, target_h - 500), overlay)
-
-    # Draw text
-    draw = ImageDraw.Draw(img)
-    try:
-        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 46)
-    except OSError:
+def _get_font(size: int) -> ImageFont.FreeTypeFont:
+    for path in [
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]:
         try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 46)
+            return ImageFont.truetype(path, size)
         except OSError:
-            font = ImageFont.load_default()
+            continue
+    return ImageFont.load_default()
 
-    wrapped = textwrap.fill(text, width=30)
+
+def _prepare_base_image(image_path: Path) -> Image.Image:
+    """Scale and crop image to 1080x1920 with extra margin for Ken Burns."""
+    img = Image.open(image_path).convert("RGB")
+    margin = 1 + ZOOM_FACTOR
+    w, h = int(TARGET_W * margin), int(TARGET_H * margin)
+    scale = max(w / img.width, h / img.height)
+    img = img.resize((int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
+    left = (img.width - w) // 2
+    top = (img.height - h) // 2
+    return img.crop((left, top, left + w, top + h))
+
+
+def _ken_burns_frame(base_img: np.ndarray, t: float, duration: float) -> np.ndarray:
+    """Slow zoom-in effect over time."""
+    progress = t / duration
+    current_zoom = 1.0 + ZOOM_FACTOR * progress
+    h, w = base_img.shape[:2]
+    new_w = int(TARGET_W * current_zoom)
+    new_h = int(TARGET_H * current_zoom)
+    left = (w - new_w) // 2
+    top = (h - new_h) // 2
+    cropped = base_img[top:top + new_h, left:left + new_w]
+    pil = Image.fromarray(cropped).resize((TARGET_W, TARGET_H), Image.LANCZOS)
+    return np.array(pil)
+
+
+def _add_text_overlay(frame: np.ndarray, text: str) -> np.ndarray:
+    """Add gradient overlay + text at bottom of frame."""
+    img = Image.fromarray(frame).convert("RGBA")
+    overlay = Image.new("RGBA", (TARGET_W, TARGET_H), (0, 0, 0, 0))
+    draw_ov = ImageDraw.Draw(overlay)
+
+    # Gradient from transparent to dark at bottom
+    for y in range(TARGET_H - 600, TARGET_H):
+        alpha = int(180 * (y - (TARGET_H - 600)) / 600)
+        draw_ov.line([(0, y), (TARGET_W, y)], fill=(0, 0, 0, alpha))
+
+    img = Image.alpha_composite(img, overlay)
+    draw = ImageDraw.Draw(img)
+
+    font = _get_font(52)
+    wrapped = textwrap.fill(text, width=28)
     bbox = draw.textbbox((0, 0), wrapped, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    x = (target_w - tw) // 2
-    y = target_h - 450 + (400 - th) // 2
+    x = (TARGET_W - tw) // 2
+    y = TARGET_H - th - 200
+
+    # Text shadow
+    draw.text((x + 2, y + 2), wrapped, font=font, fill=(0, 0, 0, 200))
     draw.text((x, y), wrapped, font=font, fill="white")
 
-    out = str(image_path).replace(".jpg", "_composed.png")
-    img.convert("RGB").save(out)
-    return out
+    return np.array(img.convert("RGB"))
 
 
 def assemble_reel(
@@ -56,26 +87,31 @@ def assemble_reel(
     output_path: Path,
     duration: float = 45.0,
 ) -> None:
-    """Create a vertical Instagram Reel (9:16 aspect, ~45s duration)."""
+    """Create vertical Instagram Reel with Ken Burns effect."""
     try:
         audio = AudioFileClip(str(audio_path))
-        duration = min(audio.duration, 59.0)
+        duration = max(min(audio.duration + 1.0, 59.0), 15.0)
 
-        composed = _compose_frame(image_path, text)
-        img = ImageClip(composed).set_duration(duration)
+        base_img = np.array(_prepare_base_image(image_path))
 
-        video = CompositeVideoClip([img])
+        bg_clip = ImageClip(base_img).set_duration(duration)
+        bg_clip = bg_clip.fl(lambda gf, t: _ken_burns_frame(base_img, t, duration))
+        bg_clip = bg_clip.set_duration(duration)
+
+        # Apply text overlay to each frame
+        video = bg_clip.fl_image(lambda frame: _add_text_overlay(frame, text))
         video = video.set_audio(audio)
 
         video.write_videofile(
             str(output_path),
-            fps=30,
+            fps=24,
             codec="libx264",
             audio_codec="aac",
+            preset="medium",
             verbose=False,
             logger=None,
         )
-        print(f"Reel assembled: {output_path}")
+        print(f"Reel assembled: {output_path} ({duration:.1f}s)")
     except Exception as e:
         print(f"MoviePy error: {e}")
         raise

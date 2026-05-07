@@ -18,10 +18,18 @@ def _fallback_text(article: dict) -> str:
     """Build engaging text from article title when Gemini fails."""
     title = article.get("title", "")
     if not title or title.startswith("Article "):
-        return "Une nouvelle découverte scientifique qui pourrait tout changer. Restez connectés pour en savoir plus."
+        return (
+            "La science ne dort jamais. "
+            "Chaque jour, des chercheurs font des découvertes qui changent notre compréhension du monde. "
+            "Suivez-nous pour ne rien manquer."
+        )
     hook = random.choice(HOOKS_FR)
-    short_title = title[:80].rstrip(".")
-    return f"{hook} : {short_title}. Suivez-nous pour plus de science au quotidien."
+    short_title = title[:120].rstrip(".")
+    return (
+        f"{hook} : {short_title}. "
+        "Une avancée majeure qui pourrait transformer notre compréhension. "
+        "Abonnez-vous pour la science au quotidien."
+    )
 
 
 def write_reel(articles: list[dict]) -> tuple[dict, str]:
