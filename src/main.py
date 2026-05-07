@@ -1,8 +1,9 @@
-"""Orchestrator: gather → write → fetch images → synthesize → video → upload → post IG."""
+"""Orchestrator: PubMed → Gemini scenes → images → TTS → video → Instagram."""
 from __future__ import annotations
 
 import os
 import sys
+import shutil
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -30,52 +31,68 @@ def run() -> None:
     today_fr = now.strftime("%d/%m/%Y")
     print(f"=== Revue Reels IG — {today_fr} ===")
 
-    # 1) Gather PubMed
+    # 1) PubMed
     print("[1/6] PubMed...")
     pm_data = pubmed.gather_all(days_back=3)
-    print(f"      articles found: {len(pm_data)}")
+    print(f"      articles: {len(pm_data)}")
 
-    # 2) Generate short text + pick article for reel
-    print("[2/6] Gemini text generation...")
-    article, reel_text = gemini_writer.write_reel(pm_data)
-    print(f"      text length: {len(reel_text)} chars")
+    # 2) Gemini → structured scenes
+    print("[2/6] Gemini scenes...")
+    article, scenes = gemini_writer.write_reel(pm_data)
+    print(f"      scenes: {len(scenes)}")
     if article.get("title"):
         print(f"      article: {article['title'][:60]}...")
+    for i, s in enumerate(scenes):
+        print(f"        [{s.get('type', '?')}] {s['text'][:50]}...")
 
-    # 3) Fetch scientific image
-    print("[3/6] Unsplash image...")
+    # 3) Fetch images (one per scene)
+    print("[3/6] Images...")
     with tempfile.TemporaryDirectory() as td:
-        image_path = Path(td) / f"reel_{today_iso}.jpg"
-        images.fetch_for_topic(article.get("topic", "science"), image_path)
-        print(f"      image: {image_path.name}")
+        td_path = Path(td)
+        scene_images = images.fetch_scene_images(
+            scenes,
+            article.get("figure_urls", []),
+            td_path,
+        )
+        print(f"      images: {len(scene_images)}")
 
-        # 4) Synthesize audio + mix with music
-        print("[4/6] Azure TTS + music...")
-        audio_path = Path(td) / f"reel_{today_iso}.wav"
-        audio.synthesize_with_music(reel_text, audio_path)
-        print(f"      audio ready: {audio_path.name}")
+        # 4) TTS — concatenate all scene texts
+        print("[4/6] Azure TTS...")
+        full_narration = " ... ".join(s["text"] for s in scenes)
+        audio_path = td_path / f"reel_{today_iso}.wav"
+        audio.synthesize_with_music(full_narration, audio_path)
+        print(f"      audio ready")
 
-        # 5) Assemble video (MoviePy)
-        print("[5/6] MoviePy assembly...")
-        reel_path = Path(td) / f"reel_{today_iso}.mp4"
-        video.assemble_reel(image_path, audio_path, reel_text, reel_path)
-        print(f"      video ready: {reel_path.name}")
+        # 5) Multi-scene video
+        print("[5/6] Video assembly...")
+        reel_path = td_path / f"reel_{today_iso}.mp4"
+        article_info = {
+            "journal": article.get("journal", ""),
+            "authors": article.get("authors", ""),
+            "date": article.get("date", ""),
+        }
+        video.assemble_reel(scene_images, audio_path, scenes, reel_path, article_info)
+        print(f"      video ready")
 
-        # Copy to workspace root for GH Actions artifact
-        import shutil
+        # Copy for artifact
         final_reel = Path(f"reel_{today_iso}.mp4")
         shutil.copy2(reel_path, final_reel)
 
-        # 6) Post to Instagram
-        print("[6/6] Instagram posting...")
+        # 6) Instagram
+        print("[6/6] Instagram...")
         if os.environ.get("INSTAGRAM_USERNAME"):
+            caption = (
+                f"{article.get('title', 'Science du jour')}\n\n"
+                f"{article.get('journal', '')} | {article.get('authors', '')}\n\n"
+                "#science #research #pubmed #dailyscience"
+            )
             try:
-                instagram.post_reel(reel_path, reel_text)
+                instagram.post_reel(final_reel, caption)
                 print(f"      posted to @{os.environ.get('INSTAGRAM_USERNAME')}")
             except Exception as e:
-                print(f"      [instagram] FAILED (non-fatal): {e}")
+                print(f"      [ig] FAILED (non-fatal): {e}")
         else:
-            print("[instagram] INSTAGRAM_USERNAME not set, skip")
+            print("      [ig] skip (no credentials)")
 
     print("=== OK ===")
 

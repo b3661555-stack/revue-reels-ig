@@ -1,58 +1,52 @@
-"""Generate short engaging text for Instagram Reels using Google Gemini."""
+"""Generate structured multi-scene reel script using Google Gemini."""
+import json
 import os
 import random
 import time
 from google import genai
 
 
-HOOKS_FR = [
-    "Saviez-vous que",
-    "Une découverte incroyable",
-    "La science vient de révéler",
-    "Nouvelle étude surprenante",
-    "Ce que la recherche nous apprend",
-]
-
-
-def _fallback_text(article: dict) -> str:
-    """Build engaging text from article title when Gemini fails."""
-    title = article.get("title", "")
-    if not title or title.startswith("Article "):
-        return (
-            "La science ne dort jamais. "
-            "Chaque jour, des chercheurs font des découvertes qui changent notre compréhension du monde. "
-            "Suivez-nous pour ne rien manquer."
-        )
-    hook = random.choice(HOOKS_FR)
-    short_title = title[:120].rstrip(".")
-    return (
-        f"{hook} : {short_title}. "
-        "Une avancée majeure qui pourrait transformer notre compréhension. "
-        "Abonnez-vous pour la science au quotidien."
-    )
-
-
-def write_reel(articles: list[dict]) -> tuple[dict, str]:
+def write_reel(articles: list[dict]) -> tuple[dict, list[dict]]:
+    """
+    Pick one article and generate structured scenes.
+    Returns (article, scenes) where each scene is:
+      {"text": str, "image_query": str, "type": str}
+    """
     if not articles:
-        return {}, "La science ne dort jamais. Nouvelles découvertes à suivre."
+        return {}, _fallback_scenes({})
 
     article = random.choice(articles)
     api_key = os.environ.get("GOOGLE_AI_STUDIO_API_KEY")
     if not api_key:
-        return article, _fallback_text(article)
+        return article, _fallback_scenes(article)
 
     client = genai.Client(api_key=api_key)
 
-    prompt = f"""Generate a short, engaging Instagram Reel script (30-50 words) about this article:
+    prompt = f"""Generate a structured Instagram Reel script about this scientific article.
 Title: {article.get('title', 'Unknown')}
+Journal: {article.get('journal', '')}
+Authors: {article.get('authors', '')}
 
-Requirements:
-- Start with a hook (question or intriguing statement)
-- One key finding in simple language
-- End with a call to action or wow moment
-- French language
-- Keep it punchy and visual
-- No hashtags, no emojis"""
+Return ONLY a JSON array of 4-5 scenes. Each scene has:
+- "text": the narration text in French (15-30 words per scene)
+- "image_query": English search term for a background image
+- "type": one of "hook", "context", "finding", "significance", "cta"
+
+Example format:
+[
+  {{"text": "Et si votre cerveau pouvait apprendre même en dormant ?", "image_query": "brain neurons glowing", "type": "hook"}},
+  {{"text": "Des chercheurs de Nature viennent de montrer que...", "image_query": "laboratory scientist microscope", "type": "context"}},
+  {{"text": "Ils ont découvert que les neurones continuent...", "image_query": "neural network abstract", "type": "finding"}},
+  {{"text": "Cela pourrait révolutionner le traitement de...", "image_query": "medical innovation future", "type": "significance"}},
+  {{"text": "Suivez-nous pour plus de science au quotidien.", "image_query": "science aesthetic minimal", "type": "cta"}}
+]
+
+Rules:
+- French language for text
+- No hashtags, no emojis
+- Hook must be a question or surprising statement
+- Keep it accessible, no jargon
+- image_query in English for Unsplash search"""
 
     for attempt in range(3):
         try:
@@ -60,13 +54,51 @@ Requirements:
                 model="gemini-2.0-flash",
                 contents=prompt,
             )
-            text = response.text.strip()
-            if len(text) > 10:
-                return article, text
+            raw = response.text.strip()
+            # Extract JSON from response
+            if "```" in raw:
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            scenes = json.loads(raw)
+            if isinstance(scenes, list) and len(scenes) >= 3:
+                return article, scenes
         except Exception as e:
             print(f"Gemini attempt {attempt + 1}/3: {e}")
             if attempt < 2:
                 time.sleep(20)
 
-    print("Gemini failed after 3 attempts, using fallback")
-    return article, _fallback_text(article)
+    print("Gemini failed, using fallback scenes")
+    return article, _fallback_scenes(article)
+
+
+def _fallback_scenes(article: dict) -> list[dict]:
+    """Build structured scenes from article metadata."""
+    title = article.get("title", "")
+    journal = article.get("journal", "")
+    topic = article.get("topic", "science")
+
+    hooks = [
+        "Et si cette découverte changeait tout ?",
+        "La science vient de franchir un nouveau cap.",
+        "Vous n'allez pas croire cette nouvelle étude.",
+        "Une avancée qui pourrait tout transformer.",
+    ]
+
+    if title and not title.startswith("Article "):
+        short_title = title[:100].rstrip(".")
+        journal_mention = f"Publiée dans {journal}, " if journal else ""
+        return [
+            {"text": random.choice(hooks), "image_query": f"{topic} abstract", "type": "hook"},
+            {"text": f"{journal_mention}une équipe de chercheurs a fait une découverte majeure.", "image_query": "scientific laboratory research", "type": "context"},
+            {"text": f"{short_title}.", "image_query": f"{topic} close up", "type": "finding"},
+            {"text": "Une avancée qui pourrait transformer notre compréhension.", "image_query": "innovation future technology", "type": "significance"},
+            {"text": "Abonnez-vous pour la science au quotidien.", "image_query": "science aesthetic minimal", "type": "cta"},
+        ]
+
+    return [
+        {"text": random.choice(hooks), "image_query": "science abstract colorful", "type": "hook"},
+        {"text": "Chaque jour, la recherche fait des pas de géant.", "image_query": "research laboratory modern", "type": "context"},
+        {"text": "De nouvelles découvertes changent notre vision du monde.", "image_query": "scientific breakthrough", "type": "finding"},
+        {"text": "Suivez-nous pour ne rien manquer.", "image_query": "science aesthetic minimal", "type": "cta"},
+    ]
