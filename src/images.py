@@ -3,6 +3,11 @@ import os
 from pathlib import Path
 import requests
 
+try:
+    import fitz
+except ImportError:
+    fitz = None
+
 
 def fetch_scene_images(
     scenes: list[dict],
@@ -17,8 +22,11 @@ def fetch_scene_images(
     for i, scene in enumerate(scenes):
         out = output_dir / f"scene_{i}.jpg"
 
-        # Use PMC figure for "finding" or "context" scenes if available
-        if scene.get("type") in ("finding", "context") and fig_idx < len(figure_urls):
+        if scene.get("type") == "paper":
+            paths.append(out)
+            continue
+
+        if scene.get("type") in ("finding", "method", "context") and fig_idx < len(figure_urls):
             if _download_image(figure_urls[fig_idx], out):
                 fig_idx += 1
                 paths.append(out)
@@ -87,3 +95,21 @@ def _create_placeholder(path: Path, text: str = "Science") -> None:
         img.save(path)
     except Exception:
         pass
+
+
+def render_pdf_page1(pdf_path: Path, output_path: Path) -> bool:
+    """Render first page of PDF as high-res PNG."""
+    if fitz is None:
+        print("  pymupdf not available, skipping PDF render")
+        return False
+    try:
+        doc = fitz.open(str(pdf_path))
+        page = doc[0]
+        pix = page.get_pixmap(dpi=200)
+        pix.save(str(output_path))
+        doc.close()
+        print(f"  PDF page 1 rendered: {pix.width}x{pix.height}")
+        return True
+    except Exception as e:
+        print(f"  PDF render failed: {e}")
+        return False

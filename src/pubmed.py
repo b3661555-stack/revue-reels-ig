@@ -65,9 +65,11 @@ def gather_all(days_back: int = 3) -> list[dict]:
                 "figure_urls": [],
             })
 
-        # Fetch PMC figures for top articles
+        # Fetch PMC figures + PMCID for top articles
         for art in articles[:5]:
-            art["figure_urls"] = _fetch_pmc_figures(art["pmid"], email)
+            pmcid, figs = _fetch_pmc_figures_and_id(art["pmid"], email)
+            art["figure_urls"] = figs
+            art["pmcid"] = pmcid
 
         return articles
     except Exception as e:
@@ -100,10 +102,9 @@ def _parse_abstracts(xml_text: str) -> dict[str, str]:
     return result
 
 
-def _fetch_pmc_figures(pmid: str, email: str) -> list[str]:
-    """Fetch figure image URLs from PMC if article is open access."""
+def _fetch_pmc_figures_and_id(pmid: str, email: str) -> tuple[str, list[str]]:
+    """Fetch PMCID and figure image URLs from PMC if article is open access."""
     try:
-        # Convert PMID → PMCID
         resp = requests.get(
             "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
             params={"ids": pmid, "format": "json", "email": email},
@@ -112,38 +113,32 @@ def _fetch_pmc_figures(pmid: str, email: str) -> list[str]:
         resp.raise_for_status()
         records = resp.json().get("records", [])
         if not records or "pmcid" not in records[0]:
-            return []
+            return "", []
 
         pmcid = records[0]["pmcid"]
 
-        # Fetch PMC article page for figure URLs
         resp2 = requests.get(
             f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/",
-            headers={"User-Agent": "RevueReelsBot/1.0 (mailto:{email})"},
+            headers={"User-Agent": f"RevueReelsBot/1.0 (mailto:{email})"},
             timeout=15,
         )
         if resp2.status_code != 200:
-            return []
+            return pmcid, []
 
-        # Extract full-size figure URLs
         urls = []
-        # Pattern 1: /pmc/articles/PMCxxxx/bin/xxx.jpg
         urls += re.findall(
             rf'https://www\.ncbi\.nlm\.nih\.gov/pmc/articles/{pmcid}/bin/[^"\']+\.(?:jpg|png|gif)',
             resp2.text
         )
-        # Pattern 2: /core/lw/xxx/PMCxxxx/figure/xxx
         urls += re.findall(
             rf'https://[^"\']*?/pmc/articles/{pmcid}/figure/[^"\']+',
             resp2.text
         )
-        # Pattern 3: CDN figure images
         urls += re.findall(
             r'https://cdn\.ncbi\.nlm\.nih\.gov/pmc/articleimages/[^"\']+\.(?:jpg|png)',
             resp2.text
         )
 
-        # Deduplicate, prefer larger images
         seen = set()
         unique = []
         for u in urls:
@@ -154,9 +149,33 @@ def _fetch_pmc_figures(pmid: str, email: str) -> list[str]:
 
         if unique:
             print(f"  PMC figures for {pmcid}: {len(unique)} found")
-        return unique[:5]
+        return pmcid, unique[:5]
     except Exception:
-        return []
+        return "", []
+
+
+def fetch_pdf(pmcid: str, output_path: Path, email: str = "") -> bool:
+    """Download PDF from PMC for open-access articles."""
+    if not pmcid:
+        return False
+    try:
+        resp = requests.get(
+            f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/pdf/",
+            headers={"User-Agent": f"RevueReelsBot/1.0 (mailto:{email})"},
+            timeout=30,
+            allow_redirects=True,
+        )
+        if resp.status_code != 200:
+            return False
+        ct = resp.headers.get("Content-Type", "")
+        if "pdf" not in ct and not resp.content[:5] == b"%PDF-":
+            return False
+        output_path.write_bytes(resp.content)
+        print(f"  PDF downloaded: {len(resp.content) // 1024}KB")
+        return True
+    except Exception as e:
+        print(f"  PDF fetch failed: {e}")
+        return False
 
 
 def _extract_topic(source: str) -> str:

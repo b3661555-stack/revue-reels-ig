@@ -45,6 +45,30 @@ def run() -> None:
     for i, s in enumerate(scenes):
         print(f"        [{s.get('type', '?')}] {s['text'][:50]}...")
 
+    # 2b) Fetch PDF page 1 if PMC article
+    pdf_page_path = None
+    pmcid = article.get("pmcid", "")
+    if pmcid:
+        print("[2b] PDF fetch...")
+        with tempfile.TemporaryDirectory() as pdf_td:
+            pdf_file = Path(pdf_td) / "article.pdf"
+            if pubmed.fetch_pdf(pmcid, pdf_file):
+                pdf_img = Path(pdf_td) / "pdf_page1.png"
+                if images.render_pdf_page1(pdf_file, pdf_img):
+                    pdf_page_path = pdf_img
+                    scenes.insert(0, {
+                        "text": article.get("title", "New Study"),
+                        "type": "paper",
+                        "image_query": "",
+                    })
+                    print(f"      PDF page 1 ready")
+            # Copy out of temp dir if we got it
+            if pdf_page_path and pdf_page_path.exists():
+                import shutil as _sh
+                stable_pdf = Path(tempfile.gettempdir()) / "pdf_page1.png"
+                _sh.copy2(pdf_page_path, stable_pdf)
+                pdf_page_path = stable_pdf
+
     # 3) Fetch images (one per scene)
     print("[3/6] Images...")
     with tempfile.TemporaryDirectory() as td:
@@ -56,9 +80,10 @@ def run() -> None:
         )
         print(f"      images: {len(scene_images)}")
 
-        # 4) TTS — concatenate all scene texts
+        # 4) TTS — concatenate all scene texts (skip paper scene for narration)
         print("[4/6] Azure TTS...")
-        full_narration = " ... ".join(s["text"] for s in scenes)
+        narration_scenes = [s for s in scenes if s.get("type") != "paper"]
+        full_narration = " ... ".join(s["text"] for s in narration_scenes)
         audio_path = td_path / f"reel_{today_iso}.wav"
         audio.synthesize_with_music(full_narration, audio_path)
         print(f"      audio ready")
@@ -71,7 +96,10 @@ def run() -> None:
             "authors": article.get("authors", ""),
             "date": article.get("date", ""),
         }
-        video.assemble_reel(scene_images, audio_path, scenes, reel_path, article_info)
+        video.assemble_reel(
+            scene_images, audio_path, scenes, reel_path,
+            article_info, pdf_page_path,
+        )
         print(f"      video ready")
 
         # Copy for artifact
