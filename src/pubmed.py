@@ -207,6 +207,12 @@ def _parse_dois(xml_text: str) -> dict[str, str]:
     return result
 
 
+_BROWSER_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+
 def fetch_article_preview(doi: str, output_path: Path) -> bool:
     """Fetch article preview image via DOI landing page og:image."""
     if not doi:
@@ -216,9 +222,10 @@ def fetch_article_preview(doi: str, output_path: Path) -> bool:
             f"https://doi.org/{doi}",
             timeout=20,
             allow_redirects=True,
-            headers={"User-Agent": "RevueReelsBot/1.0 (scholarly; mailto:revue@example.com)"},
+            headers={"User-Agent": _BROWSER_UA},
         )
         if resp.status_code != 200:
+            print(f"  Article preview: HTTP {resp.status_code} for {doi}")
             return False
         match = re.search(
             r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
@@ -230,14 +237,16 @@ def fetch_article_preview(doi: str, output_path: Path) -> bool:
                 resp.text,
             )
         if not match:
+            print(f"  Article preview: no og:image found for {doi}")
             return False
         img_url = match.group(1)
         if img_url.startswith("//"):
             img_url = "https:" + img_url
         img_resp = requests.get(img_url, timeout=15, headers={
-            "User-Agent": "RevueReelsBot/1.0",
+            "User-Agent": _BROWSER_UA,
         })
         if img_resp.status_code != 200 or len(img_resp.content) < 5000:
+            print(f"  Article preview: image fetch failed ({img_resp.status_code})")
             return False
         output_path.write_bytes(img_resp.content)
         print(f"  Article preview: {len(img_resp.content) // 1024}KB ({doi})")
@@ -256,7 +265,7 @@ def fetch_figures_from_doi(doi: str) -> list[str]:
             f"https://doi.org/{doi}",
             timeout=20,
             allow_redirects=True,
-            headers={"User-Agent": "RevueReelsBot/1.0 (scholarly; mailto:revue@example.com)"},
+            headers={"User-Agent": _BROWSER_UA},
         )
         if resp.status_code != 200:
             return []

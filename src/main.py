@@ -123,6 +123,7 @@ def run() -> None:
             "date": article.get("date", ""),
             "title": article.get("title", ""),
             "abstract": article.get("abstract", ""),
+            "doi": article.get("doi", ""),
         }
         video.assemble_reel(
             scene_images, audio_path, scenes, reel_path,

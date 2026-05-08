@@ -382,56 +382,87 @@ def _render_paper_frame(
     return np.array(img.convert("RGB"))
 
 
+_JOURNAL_STYLES = {
+    "nature": {"accent": (200, 40, 40), "header_bg": (200, 40, 40), "header_fg": (255, 255, 255)},
+    "science": {"accent": (0, 80, 160), "header_bg": (0, 80, 160), "header_fg": (255, 255, 255)},
+    "cell": {"accent": (0, 120, 100), "header_bg": (0, 120, 100), "header_fg": (255, 255, 255)},
+    "lancet": {"accent": (180, 30, 30), "header_bg": (180, 30, 30), "header_fg": (255, 255, 255)},
+    "n engl j med": {"accent": (40, 60, 120), "header_bg": (40, 60, 120), "header_fg": (255, 255, 255)},
+}
+
+
 def _render_synthetic_paper(article_info: dict) -> Image.Image:
-    """Render a synthetic A4 paper page from article metadata."""
+    """Render a realistic journal-styled paper page from article metadata."""
     w, h = 1654, 2339
     img = Image.new("RGB", (w, h), (255, 255, 255))
     draw = ImageDraw.Draw(img)
 
-    font_title = _get_font(56, bold=True)
-    font_authors = _get_font(36)
-    font_journal = _get_font(32, bold=True)
-    font_abstract = _get_font(30)
+    font_title = _get_font(54, bold=True)
+    font_authors = _get_font(34)
+    font_journal = _get_font(38, bold=True)
+    font_abstract = _get_font(28)
+    font_label = _get_font(24, bold=True)
+    font_doi = _get_font(22)
 
-    y = 160
-    journal = article_info.get("journal", "").upper()
-    if journal:
-        jw = draw.textlength(journal, font=font_journal)
-        draw.text(((w - jw) / 2, y), journal, font=font_journal, fill=(180, 40, 40))
-        y += 80
-        draw.line([(100, y), (w - 100, y)], fill=(180, 40, 40), width=3)
+    journal_raw = article_info.get("journal", "")
+    style = _JOURNAL_STYLES.get(journal_raw.lower(), {"accent": (80, 80, 80), "header_bg": (60, 60, 60), "header_fg": (255, 255, 255)})
+    accent = style["accent"]
+
+    draw.rectangle([0, 0, w, 100], fill=style["header_bg"])
+    journal_upper = journal_raw.upper() or "JOURNAL"
+    jw = draw.textlength(journal_upper, font=font_journal)
+    draw.text(((w - jw) / 2, 30), journal_upper, font=font_journal, fill=style["header_fg"])
+
+    draw.rectangle([0, 100, w, 106], fill=accent)
+
+    y = 140
+    doi = article_info.get("doi", "")
+    date = article_info.get("date", "")
+    meta_parts = []
+    if date:
+        meta_parts.append(date)
+    if doi:
+        meta_parts.append(f"DOI: {doi}")
+    if meta_parts:
+        meta_line = "  |  ".join(meta_parts)
+        mw = draw.textlength(meta_line, font=font_doi)
+        draw.text(((w - mw) / 2, y), meta_line, font=font_doi, fill=(120, 120, 120))
         y += 50
+
+    draw.line([(100, y), (w - 100, y)], fill=(220, 220, 220), width=1)
+    y += 40
+
+    draw.text((120, y), "ORIGINAL ARTICLE", font=font_label, fill=accent)
+    y += 50
 
     title = article_info.get("title", "")
     if title:
-        wrapped = textwrap.fill(title, width=45)
+        wrapped = textwrap.fill(title, width=42)
         bbox = draw.textbbox((0, 0), wrapped, font=font_title)
         tw = bbox[2] - bbox[0]
-        draw.text(((w - tw) / 2, y), wrapped, font=font_title, fill=(30, 30, 30))
         th = bbox[3] - bbox[1]
-        y += th + 50
+        draw.text(((w - tw) / 2, y), wrapped, font=font_title, fill=(20, 20, 20))
+        y += th + 40
 
     authors = article_info.get("authors", "")
     if authors:
         aw = draw.textlength(authors, font=font_authors)
-        draw.text(((w - aw) / 2, y), authors, font=font_authors, fill=(80, 80, 80))
+        draw.text(((w - aw) / 2, y), authors, font=font_authors, fill=(60, 60, 60))
         y += 60
 
-    date = article_info.get("date", "")
-    if date:
-        dw = draw.textlength(date, font=font_authors)
-        draw.text(((w - dw) / 2, y), date, font=font_authors, fill=(120, 120, 120))
-        y += 80
-
-    draw.line([(100, y), (w - 100, y)], fill=(200, 200, 200), width=2)
+    draw.line([(120, y), (w - 120, y)], fill=(200, 200, 200), width=2)
     y += 40
 
     abstract = article_info.get("abstract", "")
     if abstract:
-        draw.text((120, y), "ABSTRACT", font=font_journal, fill=(60, 60, 60))
-        y += 60
-        para = textwrap.fill(abstract[:800], width=70)
-        draw.text((120, y), para, font=font_abstract, fill=(40, 40, 40))
+        draw.rectangle([100, y - 5, w - 100, y + 35], fill=accent)
+        draw.text((120, y), "ABSTRACT", font=font_label, fill=(255, 255, 255))
+        y += 50
+
+        draw.rectangle([100, y, 104, y + 600], fill=accent)
+
+        para = textwrap.fill(abstract[:900], width=68)
+        draw.text((130, y + 10), para, font=font_abstract, fill=(30, 30, 30))
 
     return img
 
