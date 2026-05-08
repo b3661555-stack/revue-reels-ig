@@ -1,4 +1,4 @@
-"""Multi-scene vertical reel: Ken Burns, karaoke text, avatar overlay, PDF reveal."""
+"""Multi-scene vertical reel: Ken Burns, karaoke text, avatar overlay, paper reveal."""
 from pathlib import Path
 import textwrap
 import numpy as np
@@ -17,12 +17,10 @@ ZOOM = 0.12
 
 AVATAR_DIR = Path(__file__).resolve().parent.parent / "assets" / "avatar"
 AVATAR_FPS = 12
-AVATAR_DISPLAY_W, AVATAR_DISPLAY_H = 200, 272
-AVATAR_MARGIN_R, AVATAR_MARGIN_B = 40, 80
+AVATAR_DISPLAY_W, AVATAR_DISPLAY_H = 280, 380
+AVATAR_MARGIN_R = 30
 
 HIGHLIGHT_BG = (255, 180, 30, 180)
-SPOKEN_COLOR = (255, 255, 255, 255)
-UNSPOKEN_COLOR = (180, 180, 180, 160)
 
 _avatar_cache: list[Image.Image] | None = None
 
@@ -32,7 +30,7 @@ def _load_avatar_frames() -> list[Image.Image]:
     if _avatar_cache is not None:
         return _avatar_cache
     frames = []
-    for i in range(1, 100):
+    for i in range(1, 1000):
         path = AVATAR_DIR / f"frame_{i:04d}.png"
         if not path.exists():
             break
@@ -94,6 +92,16 @@ def _draw_top_gradient(draw: ImageDraw.Draw, height: int, max_alpha: int = 180):
         draw.line([(0, y), (TARGET_W, y)], fill=(0, 0, 0, alpha))
 
 
+def _paste_avatar(img: Image.Image, frame_number: int, avatar_frames: list[Image.Image] | None):
+    if not avatar_frames:
+        return
+    avatar_idx = (frame_number // max(1, FPS // AVATAR_FPS)) % len(avatar_frames)
+    avatar_img = avatar_frames[avatar_idx]
+    ax = TARGET_W - AVATAR_DISPLAY_W - AVATAR_MARGIN_R
+    ay = TARGET_H - AVATAR_DISPLAY_H
+    img.paste(avatar_img, (ax, ay), avatar_img)
+
+
 def _draw_highlighted_text(
     draw: ImageDraw.Draw,
     overlay: Image.Image,
@@ -102,76 +110,95 @@ def _draw_highlighted_text(
     duration: float,
     scene_type: str,
 ) -> None:
-    """Draw text with word-by-word karaoke highlighting."""
-    font_size = 54 if scene_type in ("hook", "finding") else 46
+    """Draw text with word-by-word karaoke highlighting, max 2 lines visible."""
+    font_size = 48 if scene_type in ("hook", "finding") else 42
     is_bold = scene_type in ("hook", "finding")
     font = _get_font(font_size, bold=is_bold)
     space_w = font.getlength(" ")
 
-    lines = textwrap.wrap(text, width=26)
-    if not lines:
+    words = text.split()
+    if not words:
         return
 
-    word_positions = []
-    line_widths = []
-    for line in lines:
-        words = line.split()
-        lw = sum(font.getlength(w) for w in words) + space_w * (len(words) - 1)
-        line_widths.append(lw)
-        for w in words:
-            word_positions.append(w)
-
-    total_words = len(word_positions)
-    if total_words == 0:
-        return
-
-    start_t = 0.3
-    end_t = max(duration - 0.5, start_t + 0.5)
+    total_words = len(words)
+    start_t = 0.2
+    end_t = max(duration - 0.3, start_t + 0.5)
     if t < start_t:
-        current_idx = -1
+        current_idx = 0
     elif t >= end_t:
-        current_idx = total_words
+        current_idx = total_words - 1
     else:
         progress = (t - start_t) / (end_t - start_t)
-        current_idx = int(progress * total_words)
+        current_idx = min(int(progress * total_words), total_words - 1)
 
-    line_height = int(font_size * 1.4)
-    total_h = line_height * len(lines)
-    base_y = TARGET_H - total_h - 200
+    max_line_w = TARGET_W - 120
+    visible_lines = []
+    line_words = []
+    line_w = 0.0
+    word_to_global = []
+
+    for gi, w in enumerate(words):
+        ww = font.getlength(w)
+        test_w = line_w + (space_w if line_words else 0) + ww
+        if test_w > max_line_w and line_words:
+            visible_lines.append(line_words)
+            line_words = [w]
+            line_w = ww
+        else:
+            line_words.append(w)
+            line_w = test_w
+        word_to_global.append(gi)
+    if line_words:
+        visible_lines.append(line_words)
+
+    current_line_idx = 0
+    counter = 0
+    for li, lwords in enumerate(visible_lines):
+        if counter + len(lwords) > current_idx:
+            current_line_idx = li
+            break
+        counter += len(lwords)
+
+    show_start = max(0, current_line_idx - 1)
+    show_end = min(len(visible_lines), show_start + 3)
+    if show_end - show_start < 3 and show_start > 0:
+        show_start = max(0, show_end - 3)
+
+    displayed_lines = visible_lines[show_start:show_end]
+    line_height = int(font_size * 1.5)
+    total_h = line_height * len(displayed_lines)
+    base_y = TARGET_H - total_h - 420
 
     highlight_overlay = Image.new("RGBA", (TARGET_W, TARGET_H), (0, 0, 0, 0))
     h_draw = ImageDraw.Draw(highlight_overlay)
 
-    word_counter = 0
-    for li, line in enumerate(lines):
-        words = line.split()
-        lw = line_widths[li]
+    global_counter = sum(len(visible_lines[i]) for i in range(show_start))
+
+    for li, lwords in enumerate(displayed_lines):
+        lw = sum(font.getlength(w) for w in lwords) + space_w * max(0, len(lwords) - 1)
         x = (TARGET_W - lw) / 2
         y = base_y + li * line_height
 
-        for wi, word in enumerate(words):
-            ww = font.getlength(word)
-            global_idx = word_counter
-
-            if global_idx == current_idx:
+        for w in lwords:
+            ww = font.getlength(w)
+            if global_counter == current_idx:
                 pad_x, pad_y = 8, 4
                 h_draw.rounded_rectangle(
                     [x - pad_x, y - pad_y, x + ww + pad_x, y + font_size + pad_y],
-                    radius=6,
-                    fill=HIGHLIGHT_BG,
+                    radius=6, fill=HIGHLIGHT_BG,
                 )
-                for dx, dy in [(2, 2), (1, 1)]:
-                    draw.text((x + dx, y + dy), word, font=font, fill=(0, 0, 0, 120))
-                draw.text((x, y), word, font=font, fill="white")
-            elif global_idx < current_idx:
-                for dx, dy in [(2, 2), (1, 1)]:
-                    draw.text((x + dx, y + dy), word, font=font, fill=(0, 0, 0, 120))
-                draw.text((x, y), word, font=font, fill="white")
+                for dx, dy in [(2, 2)]:
+                    draw.text((x + dx, y + dy), w, font=font, fill=(0, 0, 0, 120))
+                draw.text((x, y), w, font=font, fill="white")
+            elif global_counter < current_idx:
+                for dx, dy in [(2, 2)]:
+                    draw.text((x + dx, y + dy), w, font=font, fill=(0, 0, 0, 120))
+                draw.text((x, y), w, font=font, fill="white")
             else:
-                draw.text((x, y), word, font=font, fill=(200, 200, 200))
+                draw.text((x, y), w, font=font, fill=(180, 180, 180))
 
             x += ww + space_w
-            word_counter += 1
+            global_counter += 1
 
     overlay.paste(Image.alpha_composite(
         Image.new("RGBA", overlay.size, (0, 0, 0, 0)), highlight_overlay
@@ -209,7 +236,7 @@ def _render_scene_frame(
             draw.text((60, 100), meta_line, font=font_meta, fill=(200, 200, 200, 210))
 
         badges = {
-            "hook": "THE QUESTION",
+            "hook": "BREAKING",
             "background": "BACKGROUND",
             "method": "THE APPROACH",
             "finding": "KEY FINDING",
@@ -232,13 +259,7 @@ def _render_scene_frame(
     draw = ImageDraw.Draw(img)
 
     _draw_highlighted_text(draw, img, text, t, duration, scene_type)
-
-    if avatar_frames:
-        avatar_idx = (frame_number // (FPS // AVATAR_FPS)) % len(avatar_frames)
-        avatar_img = avatar_frames[avatar_idx]
-        ax = TARGET_W - AVATAR_DISPLAY_W - AVATAR_MARGIN_R
-        ay = TARGET_H - AVATAR_DISPLAY_H - AVATAR_MARGIN_B
-        img.paste(avatar_img, (ax, ay), avatar_img)
+    _paste_avatar(img, frame_number, avatar_frames)
 
     return np.array(img.convert("RGB"))
 
@@ -291,8 +312,8 @@ def _render_paper_frame(
     img = Image.alpha_composite(img, overlay)
     draw = ImageDraw.Draw(img)
 
-    font = _get_font(42, bold=True)
-    wrapped = textwrap.fill(text, width=30)
+    font = _get_font(40, bold=True)
+    wrapped = textwrap.fill(text, width=32)
     bbox = draw.textbbox((0, 0), wrapped, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     tx = (TARGET_W - tw) // 2
@@ -301,13 +322,58 @@ def _render_paper_frame(
         draw.text((tx + dx, ty + dy), wrapped, font=font, fill=(0, 0, 0, 150))
     draw.text((tx, ty), wrapped, font=font, fill="white")
 
-    if avatar_frames:
-        avatar_idx = (frame_number // (FPS // AVATAR_FPS)) % len(avatar_frames)
-        ax = TARGET_W - AVATAR_DISPLAY_W - AVATAR_MARGIN_R
-        ay = TARGET_H - AVATAR_DISPLAY_H - AVATAR_MARGIN_B
-        img.paste(avatar_frames[avatar_idx], (ax, ay), avatar_frames[avatar_idx])
+    _paste_avatar(img, frame_number, avatar_frames)
 
     return np.array(img.convert("RGB"))
+
+
+def _render_synthetic_paper(article_info: dict) -> Image.Image:
+    """Render a synthetic A4 paper page from article metadata."""
+    w, h = 1654, 2339
+    img = Image.new("RGB", (w, h), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+
+    font_title = _get_font(56, bold=True)
+    font_authors = _get_font(36)
+    font_journal = _get_font(32, bold=True)
+    font_abstract = _get_font(30)
+
+    y = 160
+    journal = article_info.get("journal", "").upper()
+    if journal:
+        draw.text((w // 2, y), journal, font=font_journal, fill=(180, 40, 40), anchor="mt")
+        y += 80
+        draw.line([(100, y), (w - 100, y)], fill=(180, 40, 40), width=3)
+        y += 50
+
+    title = article_info.get("title", "")
+    if title:
+        wrapped = textwrap.fill(title, width=45)
+        draw.text((w // 2, y), wrapped, font=font_title, fill=(30, 30, 30), anchor="mt")
+        bbox = draw.textbbox((w // 2, y), wrapped, font=font_title, anchor="mt")
+        y = bbox[3] + 50
+
+    authors = article_info.get("authors", "")
+    if authors:
+        draw.text((w // 2, y), authors, font=font_authors, fill=(80, 80, 80), anchor="mt")
+        y += 60
+
+    date = article_info.get("date", "")
+    if date:
+        draw.text((w // 2, y), date, font=font_authors, fill=(120, 120, 120), anchor="mt")
+        y += 80
+
+    draw.line([(100, y), (w - 100, y)], fill=(200, 200, 200), width=2)
+    y += 40
+
+    abstract = article_info.get("abstract", "")
+    if abstract:
+        draw.text((120, y), "ABSTRACT", font=font_journal, fill=(60, 60, 60))
+        y += 60
+        para = textwrap.fill(abstract[:800], width=70)
+        draw.text((120, y), para, font=font_abstract, fill=(40, 40, 40))
+
+    return img
 
 
 def _build_scene_clip(
@@ -364,6 +430,13 @@ def assemble_reel(
         pdf_img = None
         if pdf_page_image_path and pdf_page_image_path.exists():
             pdf_img = Image.open(pdf_page_image_path).convert("RGBA")
+        elif article_info and any(s.get("type") == "paper" for s in scenes):
+            synth = _render_synthetic_paper({
+                **(article_info or {}),
+                "title": next((s["text"] for s in scenes if s.get("type") == "paper"), ""),
+                "abstract": article_info.get("abstract", "") if article_info else "",
+            })
+            pdf_img = synth.convert("RGBA")
 
         audio = AudioFileClip(str(audio_path))
         total_dur = min(audio.duration + 1.5, 59.0)

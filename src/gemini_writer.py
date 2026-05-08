@@ -1,7 +1,6 @@
 """Generate detailed multi-scene reel script using Google Gemini (English)."""
 import json
 import os
-import random
 import time
 from google import genai
 
@@ -14,7 +13,6 @@ def write_reel(articles: list[dict]) -> tuple[dict, list[dict]]:
     if not articles:
         return {}, _fallback_scenes({})
 
-    # Prefer articles with abstracts and figures
     ranked = sorted(articles, key=lambda a: (
         len(a.get("abstract", "")) > 100,
         len(a.get("figure_urls", [])) > 0,
@@ -36,28 +34,27 @@ Journal: {article.get('journal', '')}
 Authors: {article.get('authors', '')}
 Abstract: {abstract}
 
-Generate a JSON array of 5-6 scenes for a 45-55 second reel that explains this study in depth.
+Generate a JSON array of 6 scenes for a 50-second reel. Each scene is narrated over ~8 seconds.
 
 Each scene must have:
-- "text": narration text in English (25-40 words per scene, exactly 1-2 complete sentences)
-- "image_query": English search term for background image (scientific, vivid, specific)
+- "text": narration text in English. SHORT: 12-20 words max per scene. 1 sentence only.
+- "image_query": vivid English search term for background image
 - "type": one of "hook", "background", "method", "finding", "impact", "cta"
 
 Structure:
-1. HOOK: Start with a specific number, statistic, or surprising fact from the study. Never a generic question. Name the organism, drug, protein, or population.
-2. BACKGROUND: What problem were researchers trying to solve? Be concrete about the gap in knowledge.
-3. METHOD: How did they approach it? Name the technique or model system. Simplified but specific.
-4. FINDING: The key result with numbers or magnitudes when available. This is the climax.
-5. IMPACT: Real-world implications. Who benefits? What changes? Be concrete.
-6. CTA: Reference the specific topic area (e.g. "Follow for more on cancer immunotherapy" not "follow for science").
+1. HOOK: A bold, specific statement. Lead with a number or surprising fact. Name the subject.
+2. BACKGROUND: What gap in knowledge did researchers address? Be concrete.
+3. METHOD: Name the technique. One sentence, simplified but specific.
+4. FINDING: The key result. Include a number or magnitude. This is the climax.
+5. IMPACT: Who benefits? What changes? One concrete implication.
+6. CTA: "Follow for more on [specific topic]."
 
-Rules:
-- English only, active voice throughout
-- No jargon but use proper scientific terms with brief context
-- Every sentence must be COMPLETE (never cut mid-phrase)
-- Match the tone to the significance: major breakthroughs deserve energy and conviction
-- Be specific about findings, never generic platitudes
-- image_query should be vivid and specific to the scene content
+CRITICAL RULES:
+- Third person only. Say "researchers found" or "the team discovered", NEVER "we".
+- 12-20 words per scene, never more. Short punchy sentences.
+- Every sentence must be COMPLETE. Never cut mid-phrase.
+- Active voice. Specific. No generic platitudes.
+- No jargon without context. Use proper scientific terms briefly explained.
 
 Return ONLY the JSON array, no markdown."""
 
@@ -94,23 +91,23 @@ def _fallback_scenes(article: dict) -> list[dict]:
 
     if not title or title.startswith("Article "):
         return [
-            {"text": "A remarkable new study just dropped. Here is what you need to know.", "image_query": "science abstract", "type": "hook"},
+            {"text": "A groundbreaking study just dropped. Here is what it found.", "image_query": "science abstract", "type": "hook"},
             {"text": "Researchers tackled a question at the frontier of current knowledge.", "image_query": "research lab modern", "type": "background"},
-            {"text": "Their findings could reshape how we understand this field.", "image_query": "scientific breakthrough", "type": "finding"},
-            {"text": "Follow for your daily science breakdown.", "image_query": "science aesthetic", "type": "cta"},
+            {"text": "Their findings could reshape how scientists understand this field.", "image_query": "scientific breakthrough", "type": "finding"},
+            {"text": "Follow for daily science breakthroughs.", "image_query": "science aesthetic", "type": "cta"},
         ]
 
-    short_title = _shorten(title, 120)
-    lead_author = authors.split(",")[0].strip() if authors else "researchers"
+    short_title = _shorten(title, 80)
+    lead_author = authors.split(",")[0].strip() if authors else "a research team"
 
     scenes = [
         {
-            "text": f"A new study in {journal} reveals something striking about {short_title.lower().rstrip('.')}.",
+            "text": f"New in {journal}: a discovery about {short_title.lower().rstrip('.')}.",
             "image_query": f"{topic} abstract dark",
             "type": "hook",
         },
         {
-            "text": f"A team led by {lead_author} set out to answer a fundamental question in {topic}.",
+            "text": f"{lead_author} and colleagues set out to solve a key problem in {topic}.",
             "image_query": "scientific journal publication",
             "type": "background",
         },
@@ -119,37 +116,39 @@ def _fallback_scenes(article: dict) -> list[dict]:
     if len(abstract) > 100:
         sentences = [s.strip() for s in abstract.replace(". ", ".\n").split("\n") if len(s.strip()) > 30]
         if len(sentences) >= 3:
+            method_sent = _shorten(sentences[len(sentences) // 2], 100)
+            finding_sent = _shorten(sentences[-1], 100)
             scenes.append({
-                "text": _shorten(sentences[len(sentences) // 2], 160),
+                "text": method_sent,
                 "image_query": f"{topic} laboratory experiment",
                 "type": "method",
             })
             scenes.append({
-                "text": _shorten(sentences[-1], 160),
+                "text": finding_sent,
                 "image_query": f"{topic} results data",
                 "type": "finding",
             })
         elif len(sentences) >= 1:
             scenes.append({
-                "text": _shorten(sentences[-1], 160),
+                "text": _shorten(sentences[-1], 100),
                 "image_query": f"{topic} close up detail",
                 "type": "finding",
             })
         else:
             scenes.append({
-                "text": f"Their investigation: {short_title}.",
+                "text": f"The study examined {short_title.lower().rstrip('.')}.",
                 "image_query": f"{topic} close up detail",
                 "type": "finding",
             })
     else:
         scenes.append({
-            "text": f"Their investigation: {short_title}.",
+            "text": f"The study examined {short_title.lower().rstrip('.')}.",
             "image_query": f"{topic} close up detail",
             "type": "finding",
         })
 
     scenes.append({
-        "text": f"This research could open new avenues for {topic} and have real-world impact.",
+        "text": f"These results could transform approaches to {topic}.",
         "image_query": "innovation future science",
         "type": "impact",
     })
