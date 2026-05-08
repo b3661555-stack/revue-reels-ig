@@ -116,8 +116,8 @@ def _fallback_scenes(article: dict) -> list[dict]:
     if len(abstract) > 100:
         sentences = [s.strip() for s in abstract.replace(". ", ".\n").split("\n") if len(s.strip()) > 30]
         if len(sentences) >= 3:
-            method_sent = _shorten(sentences[len(sentences) // 2], 100)
-            finding_sent = _shorten(sentences[-1], 100)
+            method_sent = _depersonalize(_shorten(sentences[len(sentences) // 2], 100))
+            finding_sent = _depersonalize(_shorten(sentences[-1], 100))
             scenes.append({
                 "text": method_sent,
                 "image_query": f"{topic} laboratory experiment",
@@ -130,7 +130,7 @@ def _fallback_scenes(article: dict) -> list[dict]:
             })
         elif len(sentences) >= 1:
             scenes.append({
-                "text": _shorten(sentences[-1], 100),
+                "text": _depersonalize(_shorten(sentences[-1], 100)),
                 "image_query": f"{topic} close up detail",
                 "type": "finding",
             })
@@ -159,6 +159,34 @@ def _fallback_scenes(article: dict) -> list[dict]:
     })
 
     return scenes
+
+
+def _depersonalize(text: str) -> str:
+    """Replace first-person language from abstracts with third-person."""
+    replacements = [
+        ("We show ", "The study shows "),
+        ("We found ", "The team found "),
+        ("We demonstrate ", "The study demonstrates "),
+        ("We report ", "The authors report "),
+        ("We identified ", "The team identified "),
+        ("We discovered ", "The team discovered "),
+        ("We observed ", "The team observed "),
+        ("We propose ", "The authors propose "),
+        ("We developed ", "The team developed "),
+        ("We present ", "The study presents "),
+        ("we show ", "the study shows "),
+        ("we found ", "the team found "),
+        ("we demonstrate ", "the study demonstrates "),
+        ("Our findings ", "The findings "),
+        ("Our results ", "The results "),
+        ("Our data ", "The data "),
+        ("our findings ", "the findings "),
+        ("our results ", "the results "),
+        ("our data ", "the data "),
+    ]
+    for old, new in replacements:
+        text = text.replace(old, new)
+    return text
 
 
 def _shorten(text: str, max_len: int) -> str:

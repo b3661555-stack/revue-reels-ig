@@ -341,7 +341,8 @@ def _render_synthetic_paper(article_info: dict) -> Image.Image:
     y = 160
     journal = article_info.get("journal", "").upper()
     if journal:
-        draw.text((w // 2, y), journal, font=font_journal, fill=(180, 40, 40), anchor="mt")
+        jw = draw.textlength(journal, font=font_journal)
+        draw.text(((w - jw) / 2, y), journal, font=font_journal, fill=(180, 40, 40))
         y += 80
         draw.line([(100, y), (w - 100, y)], fill=(180, 40, 40), width=3)
         y += 50
@@ -349,18 +350,22 @@ def _render_synthetic_paper(article_info: dict) -> Image.Image:
     title = article_info.get("title", "")
     if title:
         wrapped = textwrap.fill(title, width=45)
-        draw.text((w // 2, y), wrapped, font=font_title, fill=(30, 30, 30), anchor="mt")
-        bbox = draw.textbbox((w // 2, y), wrapped, font=font_title, anchor="mt")
-        y = bbox[3] + 50
+        bbox = draw.textbbox((0, 0), wrapped, font=font_title)
+        tw = bbox[2] - bbox[0]
+        draw.text(((w - tw) / 2, y), wrapped, font=font_title, fill=(30, 30, 30))
+        th = bbox[3] - bbox[1]
+        y += th + 50
 
     authors = article_info.get("authors", "")
     if authors:
-        draw.text((w // 2, y), authors, font=font_authors, fill=(80, 80, 80), anchor="mt")
+        aw = draw.textlength(authors, font=font_authors)
+        draw.text(((w - aw) / 2, y), authors, font=font_authors, fill=(80, 80, 80))
         y += 60
 
     date = article_info.get("date", "")
     if date:
-        draw.text((w // 2, y), date, font=font_authors, fill=(120, 120, 120), anchor="mt")
+        dw = draw.textlength(date, font=font_authors)
+        draw.text(((w - dw) / 2, y), date, font=font_authors, fill=(120, 120, 120))
         y += 80
 
     draw.line([(100, y), (w - 100, y)], fill=(200, 200, 200), width=2)
