@@ -205,6 +205,57 @@ def _draw_highlighted_text(
     ), (0, 0), highlight_overlay)
 
 
+def _draw_passage_overlay(
+    draw: ImageDraw.Draw,
+    overlay: Image.Image,
+    passage: str,
+    t: float,
+    duration: float,
+) -> None:
+    """Draw abstract passage as a styled quote card with progressive word reveal."""
+    fade_in, fade_out = 0.6, 0.6
+    if t < fade_in:
+        alpha_mult = t / fade_in
+    elif t > duration - fade_out:
+        alpha_mult = max(0, (duration - t) / fade_out)
+    else:
+        alpha_mult = 1.0
+    alpha_mult = max(0.0, min(1.0, alpha_mult))
+    if alpha_mult < 0.05:
+        return
+
+    font = _get_font(28)
+    wrapped = textwrap.fill(passage, width=38)
+    margin, padding = 60, 22
+    bbox = draw.textbbox((0, 0), wrapped, font=font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+    box_w = min(text_w + padding * 2 + 30, TARGET_W - margin * 2)
+    box_h = text_h + padding * 2 + 10
+    box_x = (TARGET_W - box_w) // 2
+    box_y = 360
+
+    bg_alpha = int(160 * alpha_mult)
+    box_img = Image.new("RGBA", (box_w, box_h), (15, 15, 35, bg_alpha))
+    box_draw = ImageDraw.Draw(box_img)
+    box_draw.rectangle([0, 0, box_w - 1, box_h - 1],
+                        outline=(255, 255, 255, int(80 * alpha_mult)), width=1)
+    box_draw.rectangle([0, 0, 4, box_h],
+                        fill=(255, 180, 30, int(200 * alpha_mult)))
+    overlay.paste(box_img, (box_x, box_y), box_img)
+
+    progress = min(t / max(duration - 1.0, 0.5), 1.0)
+    words = passage.split()
+    visible_count = max(1, int(len(words) * progress))
+    visible_text = " ".join(words[:visible_count])
+    visible_wrapped = textwrap.fill(visible_text, width=38)
+    text_alpha = int(220 * alpha_mult)
+    draw.text(
+        (box_x + padding + 12, box_y + padding),
+        visible_wrapped, font=font, fill=(255, 255, 230, text_alpha),
+    )
+
+
 def _render_scene_frame(
     bg_frame: np.ndarray,
     text: str,
@@ -214,6 +265,7 @@ def _render_scene_frame(
     frame_number: int,
     article_info: dict | None = None,
     avatar_frames: list[Image.Image] | None = None,
+    passage: str | None = None,
 ) -> np.ndarray:
     img = Image.fromarray(bg_frame).convert("RGBA")
     overlay = Image.new("RGBA", (TARGET_W, TARGET_H), (0, 0, 0, 0))
@@ -257,6 +309,9 @@ def _render_scene_frame(
 
     img = Image.alpha_composite(img, overlay)
     draw = ImageDraw.Draw(img)
+
+    if passage and scene_type in ("finding", "method"):
+        _draw_passage_overlay(draw, img, passage, t, duration)
 
     _draw_highlighted_text(draw, img, text, t, duration, scene_type)
     _paste_avatar(img, frame_number, avatar_frames)
@@ -390,6 +445,7 @@ def _build_scene_clip(
     avatar_frames: list[Image.Image] | None = None,
     global_frame_offset: int = 0,
     pdf_page_image: Image.Image | None = None,
+    passage: str | None = None,
 ) -> tuple[ImageSequenceClip, int]:
     n_frames = int(duration * FPS)
 
@@ -411,7 +467,7 @@ def _build_scene_clip(
         bg = _ken_burns_frame(base, t, duration)
         frame = _render_scene_frame(
             bg, text, scene_type, t, duration,
-            global_frame_offset + i, article_info, avatar_frames,
+            global_frame_offset + i, article_info, avatar_frames, passage,
         )
         frames.append(frame)
     return ImageSequenceClip(frames, fps=FPS), global_frame_offset + n_frames
@@ -449,20 +505,33 @@ def assemble_reel(
 
         paper_dur = 3.5 if any(s.get("type") == "paper" for s in scenes) else 0
         remaining = total_dur - paper_dur
-        narrative_count = sum(1 for s in scenes if s.get("type") != "paper")
-        per_scene = remaining / max(narrative_count, 1)
+
+        narrative_scenes = [s for s in scenes if s.get("type") != "paper"]
+        word_counts = [max(len(s["text"].split()), 3) for s in narrative_scenes]
+        total_words = sum(word_counts) or 1
+        raw_durs = [(wc / total_words) * remaining for wc in word_counts]
+        min_dur = 3.0
+        adj_durs = [max(d, min_dur) for d in raw_durs]
+        scale = remaining / sum(adj_durs) if sum(adj_durs) > 0 else 1
+        scene_durations = [d * scale for d in adj_durs]
 
         clips = []
         frame_offset = 0
+        dur_idx = 0
         for i, scene in enumerate(scenes):
             img_path = scene_images[i] if i < len(scene_images) else scene_images[-1]
-            dur = paper_dur if scene.get("type") == "paper" else per_scene
+            if scene.get("type") == "paper":
+                dur = paper_dur
+            else:
+                dur = scene_durations[dur_idx] if dur_idx < len(scene_durations) else 5.0
+                dur_idx += 1
 
             clip, frame_offset = _build_scene_clip(
                 img_path, scene["text"], dur,
                 scene.get("type", "context"), article_info,
                 avatar_frames, frame_offset,
                 pdf_img if scene.get("type") == "paper" else None,
+                scene.get("passage"),
             )
             clips.append(clip)
 

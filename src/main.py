@@ -45,27 +45,55 @@ def run() -> None:
     for i, s in enumerate(scenes):
         print(f"        [{s.get('type', '?')}] {s['text'][:50]}...")
 
-    # 2b) Always prepend paper scene + fetch PDF if available
-    pdf_page_path = None
+    # 2b) Fetch article preview: og:image from DOI, then PDF, then synthetic fallback
+    paper_image_path = None
+    doi = article.get("doi", "")
     pmcid = article.get("pmcid", "")
-    if pmcid:
-        print("[2b] PDF fetch...")
+
+    if doi:
+        print("[2b] Article preview via DOI...")
+        with tempfile.TemporaryDirectory() as prev_td:
+            prev_img = Path(prev_td) / "preview.jpg"
+            if pubmed.fetch_article_preview(doi, prev_img):
+                stable = Path(tempfile.gettempdir()) / "article_preview.jpg"
+                shutil.copy2(prev_img, stable)
+                paper_image_path = stable
+                print(f"      Preview ready (og:image)")
+
+    if not paper_image_path and pmcid:
+        print("[2b] PDF fetch fallback...")
         with tempfile.TemporaryDirectory() as pdf_td:
             pdf_file = Path(pdf_td) / "article.pdf"
             if pubmed.fetch_pdf(pmcid, pdf_file):
                 pdf_img = Path(pdf_td) / "pdf_page1.png"
                 if images.render_pdf_page1(pdf_file, pdf_img):
-                    stable_pdf = Path(tempfile.gettempdir()) / "pdf_page1.png"
-                    shutil.copy2(pdf_img, stable_pdf)
-                    pdf_page_path = stable_pdf
+                    stable = Path(tempfile.gettempdir()) / "pdf_page1.png"
+                    shutil.copy2(pdf_img, stable)
+                    paper_image_path = stable
                     print(f"      PDF page 1 ready")
 
-    # Always add paper scene at start (synthetic if no real PDF)
+    # Always add paper scene at start (synthetic if no real preview/PDF)
     scenes.insert(0, {
         "text": article.get("title", "New Study"),
         "type": "paper",
         "image_query": "",
     })
+
+    # 2c) Extract abstract passages for dynamic text overlay
+    abstract_text = article.get("abstract", "")
+    if abstract_text:
+        sentences = [s.strip() for s in abstract_text.replace(". ", ".\n").split("\n")
+                     if len(s.strip()) > 30]
+        if len(sentences) >= 3:
+            for sc in scenes:
+                if sc.get("type") == "method" and "passage" not in sc:
+                    sc["passage"] = sentences[len(sentences) // 2][:200]
+                elif sc.get("type") == "finding" and "passage" not in sc:
+                    sc["passage"] = sentences[-1][:200]
+        elif len(sentences) >= 1:
+            for sc in scenes:
+                if sc.get("type") == "finding" and "passage" not in sc:
+                    sc["passage"] = sentences[-1][:200]
 
     # 3) Fetch images (one per scene)
     print("[3/6] Images...")
@@ -98,7 +126,7 @@ def run() -> None:
         }
         video.assemble_reel(
             scene_images, audio_path, scenes, reel_path,
-            article_info, pdf_page_path,
+            article_info, paper_image_path,
         )
         print(f"      video ready")
 

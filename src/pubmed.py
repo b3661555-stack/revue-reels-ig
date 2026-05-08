@@ -45,6 +45,7 @@ def gather_all(days_back: int = 3) -> list[dict]:
             "rettype": "abstract", "retmode": "xml", "email": email,
         }, timeout=20)
         abstracts = _parse_abstracts(resp3.text) if resp3.status_code == 200 else {}
+        dois = _parse_dois(resp3.text) if resp3.status_code == 200 else {}
 
         articles = []
         for pmid in ids[:10]:
@@ -63,6 +64,7 @@ def gather_all(days_back: int = 3) -> list[dict]:
                 "date": info.get("pubdate", ""),
                 "abstract": abstracts.get(pmid, ""),
                 "topic": _extract_topic(info.get("source", "")),
+                "doi": dois.get(pmid, ""),
                 "figure_urls": [],
             })
 
@@ -71,6 +73,8 @@ def gather_all(days_back: int = 3) -> list[dict]:
             pmcid, figs = _fetch_pmc_figures_and_id(art["pmid"], email)
             art["figure_urls"] = figs
             art["pmcid"] = pmcid
+            if not figs and art.get("doi"):
+                art["figure_urls"] = fetch_figures_from_doi(art["doi"])
 
         return articles
     except Exception as e:
@@ -177,6 +181,116 @@ def fetch_pdf(pmcid: str, output_path: Path, email: str = "") -> bool:
     except Exception as e:
         print(f"  PDF fetch failed: {e}")
         return False
+
+
+def _parse_dois(xml_text: str) -> dict[str, str]:
+    """Parse DOIs from efetch XML keyed by PMID."""
+    result = {}
+    try:
+        root = ET.fromstring(xml_text)
+        for article in root.findall(".//PubmedArticle"):
+            pmid_el = article.find(".//PMID")
+            if pmid_el is None:
+                continue
+            pmid = pmid_el.text
+            for aid in article.findall(".//ArticleId"):
+                if aid.get("IdType") == "doi" and aid.text:
+                    result[pmid] = aid.text
+                    break
+            if pmid not in result:
+                for eloc in article.findall(".//ELocationID"):
+                    if eloc.get("EIdType") == "doi" and eloc.text:
+                        result[pmid] = eloc.text
+                        break
+    except Exception:
+        pass
+    return result
+
+
+def fetch_article_preview(doi: str, output_path: Path) -> bool:
+    """Fetch article preview image via DOI landing page og:image."""
+    if not doi:
+        return False
+    try:
+        resp = requests.get(
+            f"https://doi.org/{doi}",
+            timeout=20,
+            allow_redirects=True,
+            headers={"User-Agent": "RevueReelsBot/1.0 (scholarly; mailto:revue@example.com)"},
+        )
+        if resp.status_code != 200:
+            return False
+        match = re.search(
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+            resp.text,
+        )
+        if not match:
+            match = re.search(
+                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+                resp.text,
+            )
+        if not match:
+            return False
+        img_url = match.group(1)
+        if img_url.startswith("//"):
+            img_url = "https:" + img_url
+        img_resp = requests.get(img_url, timeout=15, headers={
+            "User-Agent": "RevueReelsBot/1.0",
+        })
+        if img_resp.status_code != 200 or len(img_resp.content) < 5000:
+            return False
+        output_path.write_bytes(img_resp.content)
+        print(f"  Article preview: {len(img_resp.content) // 1024}KB ({doi})")
+        return True
+    except Exception as e:
+        print(f"  Article preview failed: {e}")
+        return False
+
+
+def fetch_figures_from_doi(doi: str) -> list[str]:
+    """Scrape figure thumbnail URLs from DOI landing page."""
+    if not doi:
+        return []
+    try:
+        resp = requests.get(
+            f"https://doi.org/{doi}",
+            timeout=20,
+            allow_redirects=True,
+            headers={"User-Agent": "RevueReelsBot/1.0 (scholarly; mailto:revue@example.com)"},
+        )
+        if resp.status_code != 200:
+            return []
+        urls = []
+        urls += re.findall(
+            r'https://media\.springernature\.com/[^"\'>\s]+\.(?:jpg|png|gif)',
+            resp.text,
+        )
+        urls += re.findall(
+            r'https://[^"\'>\s]*science\.org[^"\'>\s]+/F\d+\.[^"\'>\s]+\.jpg',
+            resp.text,
+        )
+        urls += re.findall(
+            r'https://[^"\'>\s]*els-cdn\.com[^"\'>\s]+\.(?:jpg|png)',
+            resp.text,
+        )
+        urls += re.findall(
+            r'https://cdn\.ncbi\.nlm\.nih\.gov/pmc/articleimages/[^"\'>\s]+\.(?:jpg|png)',
+            resp.text,
+        )
+        seen = set()
+        unique = []
+        for u in urls:
+            if any(x in u.lower() for x in ["logo", "icon", "banner", "avatar", "badge", "1x1"]):
+                continue
+            key = u.split("/")[-1].split("?")[0]
+            if key not in seen:
+                seen.add(key)
+                unique.append(u)
+        if unique:
+            print(f"  DOI figures for {doi}: {len(unique)} found")
+        return unique[:8]
+    except Exception:
+        return []
 
 
 def _extract_topic(source: str) -> str:
