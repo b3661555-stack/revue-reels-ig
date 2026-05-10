@@ -188,9 +188,10 @@ def fetch_pdf_via_unpaywall(doi: str, output_path: Path, email: str = "") -> boo
     if not doi:
         return False
     try:
+        api_email = email or os.environ.get("PUBMED_EMAIL", "revuereels@proton.me")
         resp = requests.get(
             f"https://api.unpaywall.org/v2/{doi}",
-            params={"email": email or "revue@example.com"},
+            params={"email": api_email},
             timeout=15,
         )
         if resp.status_code != 200:
