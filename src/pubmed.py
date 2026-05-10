@@ -1,6 +1,7 @@
 """Fetch PubMed articles with abstract, metadata, and PMC figure URLs."""
 import os
 import re
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -181,6 +182,45 @@ def fetch_pdf(pmcid: str, output_path: Path, email: str = "") -> bool:
     except Exception as e:
         print(f"  PDF fetch failed: {e}")
         return False
+
+
+def screenshot_article_page(pmid: str, doi: str, output_path: Path) -> bool:
+    """Screenshot article abstract page using headless Chrome."""
+    urls = []
+    if doi:
+        urls.append(f"https://doi.org/{doi}")
+    urls.append(f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/")
+
+    chrome_names = [
+        "google-chrome-stable", "google-chrome", "chromium-browser", "chromium",
+    ]
+
+    for url in urls:
+        for chrome in chrome_names:
+            try:
+                result = subprocess.run(
+                    [chrome, "--headless=new", "--no-sandbox", "--disable-gpu",
+                     "--disable-dev-shm-usage", "--hide-scrollbars",
+                     f"--screenshot={output_path}", "--window-size=1200,1800",
+                     "--virtual-time-budget=5000", url],
+                    capture_output=True, timeout=45,
+                )
+                if (result.returncode == 0
+                        and output_path.exists()
+                        and output_path.stat().st_size > 10000):
+                    print(f"  Article screenshot: {output_path.stat().st_size // 1024}KB")
+                    return True
+            except FileNotFoundError:
+                continue
+            except subprocess.TimeoutExpired:
+                print(f"  Screenshot timed out ({chrome})")
+                continue
+            except Exception as e:
+                print(f"  Screenshot error: {e}")
+                continue
+
+    print("  No Chrome available for screenshot")
+    return False
 
 
 def fetch_pdf_via_unpaywall(doi: str, output_path: Path, email: str = "") -> bool:

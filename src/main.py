@@ -70,6 +70,13 @@ def run() -> None:
         figs_dir.mkdir(exist_ok=True)
         pdf_figure_paths = images.extract_figures_from_pdf(stable_pdf, figs_dir)
 
+    if not paper_image_path:
+        print("[2b] Article page screenshot...")
+        screenshot_img = Path(tempfile.gettempdir()) / "article_screenshot.png"
+        if pubmed.screenshot_article_page(article.get("pmid", ""), doi, screenshot_img):
+            paper_image_path = screenshot_img
+            print(f"      Screenshot ready")
+
     if not paper_image_path and doi:
         print("[2b] og:image fallback...")
         prev_img = Path(tempfile.gettempdir()) / "article_preview.jpg"
