@@ -185,11 +185,8 @@ def fetch_pdf(pmcid: str, output_path: Path, email: str = "") -> bool:
 
 
 def screenshot_article_page(pmid: str, doi: str, output_path: Path) -> bool:
-    """Screenshot article abstract page using headless Chrome."""
-    urls = []
-    if doi:
-        urls.append(f"https://doi.org/{doi}")
-    urls.append(f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/")
+    """Screenshot PubMed abstract page using headless Chrome."""
+    urls = [f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"]
 
     chrome_names = [
         "google-chrome-stable", "google-chrome", "chromium-browser", "chromium",
