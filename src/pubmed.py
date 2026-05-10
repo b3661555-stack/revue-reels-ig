@@ -183,6 +183,49 @@ def fetch_pdf(pmcid: str, output_path: Path, email: str = "") -> bool:
         return False
 
 
+def fetch_pdf_via_unpaywall(doi: str, output_path: Path, email: str = "") -> bool:
+    """Fetch open-access PDF via Unpaywall API."""
+    if not doi:
+        return False
+    try:
+        resp = requests.get(
+            f"https://api.unpaywall.org/v2/{doi}",
+            params={"email": email or "revue@example.com"},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            print(f"  Unpaywall: HTTP {resp.status_code}")
+            return False
+        data = resp.json()
+        pdf_url = None
+        boa = data.get("best_oa_location") or {}
+        pdf_url = boa.get("url_for_pdf") or boa.get("url")
+        if not pdf_url:
+            for loc in data.get("oa_locations", []):
+                if loc.get("url_for_pdf"):
+                    pdf_url = loc["url_for_pdf"]
+                    break
+        if not pdf_url:
+            print(f"  Unpaywall: no OA PDF for {doi}")
+            return False
+        pdf_resp = requests.get(
+            pdf_url, timeout=30, allow_redirects=True,
+            headers={"User-Agent": _BROWSER_UA},
+        )
+        if pdf_resp.status_code != 200:
+            print(f"  Unpaywall PDF: HTTP {pdf_resp.status_code}")
+            return False
+        if b"%PDF" not in pdf_resp.content[:10] and "pdf" not in pdf_resp.headers.get("Content-Type", ""):
+            print(f"  Unpaywall: not a PDF")
+            return False
+        output_path.write_bytes(pdf_resp.content)
+        print(f"  Unpaywall PDF: {len(pdf_resp.content) // 1024}KB")
+        return True
+    except Exception as e:
+        print(f"  Unpaywall failed: {e}")
+        return False
+
+
 def _parse_dois(xml_text: str) -> dict[str, str]:
     """Parse DOIs from efetch XML keyed by PMID."""
     result = {}

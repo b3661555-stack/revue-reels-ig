@@ -97,6 +97,41 @@ def _create_placeholder(path: Path, text: str = "Science") -> None:
         pass
 
 
+def extract_figures_from_pdf(pdf_path: Path, output_dir: Path, max_figures: int = 5) -> list[Path]:
+    """Extract figure images from PDF using PyMuPDF."""
+    if fitz is None:
+        return []
+    try:
+        doc = fitz.open(str(pdf_path))
+        figures = []
+        for page_num in range(min(len(doc), 15)):
+            page = doc[page_num]
+            for img_idx, img_info in enumerate(page.get_images(full=True)):
+                xref = img_info[0]
+                base_image = doc.extract_image(xref)
+                if not base_image:
+                    continue
+                image_bytes = base_image["image"]
+                w, h = base_image["width"], base_image["height"]
+                if w < 300 or h < 200 or len(image_bytes) < 10000:
+                    continue
+                ext = base_image.get("ext", "png")
+                out = output_dir / f"pdf_fig_p{page_num}_{img_idx}.{ext}"
+                out.write_bytes(image_bytes)
+                figures.append(out)
+                if len(figures) >= max_figures:
+                    break
+            if len(figures) >= max_figures:
+                break
+        doc.close()
+        if figures:
+            print(f"  PDF figures extracted: {len(figures)}")
+        return figures
+    except Exception as e:
+        print(f"  PDF figure extraction failed: {e}")
+        return []
+
+
 def render_pdf_page1(pdf_path: Path, output_path: Path) -> bool:
     """Render first page of PDF as high-res PNG."""
     if fitz is None:
