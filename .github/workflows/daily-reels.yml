@@ -24,6 +24,9 @@ jobs:
       - name: Install ffmpeg and fonts
         run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
 
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps chromium
+
       - name: Generate and post reel
         env:
           GOOGLE_AI_STUDIO_API_KEY: ${{ secrets.GOOGLE_AI_STUDIO_API_KEY }}

@@ -1,7 +1,6 @@
 """Fetch PubMed articles with abstract, metadata, and PMC figure URLs."""
 import os
 import re
-import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -185,39 +184,25 @@ def fetch_pdf(pmcid: str, output_path: Path, email: str = "") -> bool:
 
 
 def screenshot_article_page(pmid: str, doi: str, output_path: Path) -> bool:
-    """Screenshot PubMed abstract page using headless Chrome."""
-    urls = [f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"]
-
-    chrome_names = [
-        "google-chrome-stable", "google-chrome", "chromium-browser", "chromium",
-    ]
-
-    for url in urls:
-        for chrome in chrome_names:
-            try:
-                result = subprocess.run(
-                    [chrome, "--headless=new", "--no-sandbox", "--disable-gpu",
-                     "--disable-dev-shm-usage", "--hide-scrollbars",
-                     f"--screenshot={output_path}", "--window-size=1200,1800",
-                     "--virtual-time-budget=5000", url],
-                    capture_output=True, timeout=45,
-                )
-                if (result.returncode == 0
-                        and output_path.exists()
-                        and output_path.stat().st_size > 10000):
-                    print(f"  Article screenshot: {output_path.stat().st_size // 1024}KB")
-                    return True
-            except FileNotFoundError:
-                continue
-            except subprocess.TimeoutExpired:
-                print(f"  Screenshot timed out ({chrome})")
-                continue
-            except Exception as e:
-                print(f"  Screenshot error: {e}")
-                continue
-
-    print("  No Chrome available for screenshot")
-    return False
+    """Screenshot PubMed abstract page using Playwright."""
+    url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1200, "height": 1600})
+            page.goto(url, wait_until="networkidle", timeout=30000)
+            page.wait_for_timeout(1000)
+            page.screenshot(path=str(output_path), full_page=False)
+            browser.close()
+        if output_path.exists() and output_path.stat().st_size > 50000:
+            print(f"  PubMed screenshot: {output_path.stat().st_size // 1024}KB")
+            return True
+        print(f"  PubMed screenshot too small: {output_path.stat().st_size // 1024}KB")
+        return False
+    except Exception as e:
+        print(f"  Playwright screenshot failed: {e}")
+        return False
 
 
 def fetch_pdf_via_unpaywall(doi: str, output_path: Path, email: str = "") -> bool:
