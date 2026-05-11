@@ -38,7 +38,7 @@ Generate a JSON array of 6 scenes for a 50-second reel. Each scene is narrated o
 
 Each scene must have:
 - "text": narration text in English. SHORT: 12-20 words max per scene. 1 sentence only.
-- "image_query": vivid English search term for background image
+- "image_query": 2-4 word Unsplash search query (e.g. "brain MRI scan", "lab microscope"). SHORT, no sentences.
 - "type": one of "hook", "background", "method", "finding", "impact", "cta"
 
 Structure:
@@ -61,7 +61,7 @@ Return ONLY the JSON array, no markdown."""
     for attempt in range(3):
         try:
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.5-flash",
                 contents=prompt,
             )
             raw = response.text.strip()
@@ -71,6 +71,11 @@ Return ONLY the JSON array, no markdown."""
                     raw = raw[4:]
             scenes = json.loads(raw)
             if isinstance(scenes, list) and len(scenes) >= 4:
+                for s in scenes:
+                    q = s.get("image_query", "")
+                    words = q.split()
+                    if len(words) > 5:
+                        s["image_query"] = " ".join(words[:4])
                 return article, scenes
         except Exception as e:
             print(f"Gemini attempt {attempt + 1}/3: {e}")

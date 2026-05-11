@@ -4,12 +4,36 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 import xml.etree.ElementTree as ET
+import time
 import requests
 
 
-def gather_all(days_back: int = 3) -> list[dict]:
-    email = os.environ.get("PUBMED_EMAIL", "revue@example.com")
+def _get_with_retry(url, params, timeout=15, max_retries=3):
+    """GET with retry on 5xx errors."""
+    for attempt in range(max_retries):
+        try:
+            resp = requests.get(url, params=params, timeout=timeout)
+            if resp.status_code < 500:
+                return resp
+            if attempt < max_retries - 1:
+                wait = (attempt + 1) * 10
+                print(f"  PubMed {resp.status_code}, retry in {wait}s...")
+                time.sleep(wait)
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                print(f"  PubMed timeout, retry...")
+                time.sleep(5)
+            else:
+                raise
+    return resp
+
+
+def gather_all(days_back: int = 0) -> list[dict]:
+    email = os.environ.get("PUBMED_EMAIL", "revuereels@proton.me")
     base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+
+    if days_back == 0:
+        days_back = int(os.environ.get("PUBMED_DAYS_BACK", "7"))
 
     date_from = (datetime.now() - timedelta(days=days_back)).strftime("%Y/%m/%d")
     date_to = datetime.now().strftime("%Y/%m/%d")
@@ -22,25 +46,25 @@ def gather_all(days_back: int = 3) -> list[dict]:
 
     try:
         # Search
-        resp = requests.get(f"{base}/esearch.fcgi", params={
+        resp = _get_with_retry(f"{base}/esearch.fcgi", params={
             "db": "pubmed", "term": query, "retmax": 20,
             "retmode": "json", "email": email,
-        }, timeout=15)
+        })
         resp.raise_for_status()
         ids = resp.json().get("esearchresult", {}).get("idlist", [])
         if not ids:
             return []
 
         # Summary (title, journal, authors, date)
-        resp2 = requests.get(f"{base}/esummary.fcgi", params={
+        resp2 = _get_with_retry(f"{base}/esummary.fcgi", params={
             "db": "pubmed", "id": ",".join(ids[:10]),
             "retmode": "json", "email": email,
-        }, timeout=15)
+        })
         resp2.raise_for_status()
         summary = resp2.json().get("result", {})
 
         # Abstracts (XML)
-        resp3 = requests.get(f"{base}/efetch.fcgi", params={
+        resp3 = _get_with_retry(f"{base}/efetch.fcgi", params={
             "db": "pubmed", "id": ",".join(ids[:10]),
             "rettype": "abstract", "retmode": "xml", "email": email,
         }, timeout=20)
@@ -184,15 +208,34 @@ def fetch_pdf(pmcid: str, output_path: Path, email: str = "") -> bool:
 
 
 def screenshot_article_page(pmid: str, doi: str, output_path: Path) -> bool:
-    """Screenshot PubMed abstract page using Playwright."""
+    """Screenshot PubMed abstract page using Playwright.
+
+    Note: PubMed uses Cloudflare CAPTCHA that blocks headless browsers.
+    This function detects CAPTCHA pages and returns False.
+    """
+    if not pmid:
+        return False
     url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = browser.new_page(viewport={"width": 1200, "height": 1600})
+            page = browser.new_page(
+                viewport={"width": 1200, "height": 1600},
+                user_agent=_BROWSER_UA,
+            )
             page.goto(url, wait_until="networkidle", timeout=30000)
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(2000)
+
+            # Check for CAPTCHA / Cloudflare challenge
+            page_text = page.inner_text("body").lower()
+            captcha_markers = ["captcha", "checking your browser", "verify you are human",
+                               "select all squares", "click verify", "challenge"]
+            if any(marker in page_text for marker in captcha_markers):
+                print(f"  PubMed screenshot: CAPTCHA detected, skipping")
+                browser.close()
+                return False
+
             page.screenshot(path=str(output_path), full_page=False)
             browser.close()
         if output_path.exists() and output_path.stat().st_size > 50000:

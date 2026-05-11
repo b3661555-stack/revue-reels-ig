@@ -33,7 +33,7 @@ def run() -> None:
 
     # 1) PubMed
     print("[1/6] PubMed...")
-    pm_data = pubmed.gather_all(days_back=3)
+    pm_data = pubmed.gather_all()
     print(f"      articles: {len(pm_data)}")
 
     # 2) Gemini → structured scenes
@@ -70,19 +70,19 @@ def run() -> None:
         figs_dir.mkdir(exist_ok=True)
         pdf_figure_paths = images.extract_figures_from_pdf(stable_pdf, figs_dir)
 
-    if not paper_image_path:
-        print("[2b] Article page screenshot...")
-        screenshot_img = Path(tempfile.gettempdir()) / "article_screenshot.png"
-        if pubmed.screenshot_article_page(article.get("pmid", ""), doi, screenshot_img):
-            paper_image_path = screenshot_img
-            print(f"      Screenshot ready")
-
     if not paper_image_path and doi:
-        print("[2b] og:image fallback...")
+        print("[2b] og:image from journal...")
         prev_img = Path(tempfile.gettempdir()) / "article_preview.jpg"
         if pubmed.fetch_article_preview(doi, prev_img):
             paper_image_path = prev_img
             print(f"      Preview ready (og:image)")
+
+    if not paper_image_path:
+        print("[2b] PubMed screenshot fallback...")
+        screenshot_img = Path(tempfile.gettempdir()) / "article_screenshot.png"
+        if pubmed.screenshot_article_page(article.get("pmid", ""), doi, screenshot_img):
+            paper_image_path = screenshot_img
+            print(f"      Screenshot ready")
 
     # Always add paper scene at start (synthetic if nothing else)
     scenes.insert(0, {
@@ -127,7 +127,27 @@ def run() -> None:
         )
         print(f"      images: {len(scene_images)}")
 
-        # Override images: passage scenes → paper, finding/method → PDF figures
+        # Download DOI figures if no PDF figures available
+        if not pdf_figure_paths and article.get("figure_urls"):
+            print(f"      Downloading {len(article['figure_urls'])} DOI figures...")
+            doi_figs_dir = td_path / "doi_figures"
+            doi_figs_dir.mkdir(exist_ok=True)
+            for idx, fig_url in enumerate(article["figure_urls"][:5]):
+                try:
+                    import requests
+                    fr = requests.get(fig_url, timeout=15, headers={
+                        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/120.0.0.0"
+                    })
+                    if fr.status_code == 200 and len(fr.content) > 5000:
+                        ext = "png" if "png" in fig_url.lower() else "jpg"
+                        fig_path = doi_figs_dir / f"fig_{idx}.{ext}"
+                        fig_path.write_bytes(fr.content)
+                        pdf_figure_paths.append(fig_path)
+                        print(f"        DOI figure {idx}: {len(fr.content)//1024}KB")
+                except Exception:
+                    pass
+
+        # Override images: passage scenes → paper, finding/method → real figures
         fig_used = 0
         for i, sc in enumerate(scenes):
             if i >= len(scene_images):
@@ -137,7 +157,7 @@ def run() -> None:
                 print(f"      scene_{i}: paper background ({sc.get('type')})")
             elif sc.get("type") in ("finding", "method") and fig_used < len(pdf_figure_paths):
                 shutil.copy2(pdf_figure_paths[fig_used], scene_images[i])
-                print(f"      scene_{i}: PDF figure {fig_used}")
+                print(f"      scene_{i}: real figure {fig_used}")
                 fig_used += 1
 
         # 4) TTS — concatenate all scene texts (skip paper scene)
