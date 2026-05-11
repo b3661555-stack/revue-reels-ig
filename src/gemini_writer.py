@@ -13,9 +13,13 @@ def write_reel(articles: list[dict]) -> tuple[dict, list[dict]]:
     if not articles:
         return {}, _fallback_scenes({})
 
+    # Prefer articles with visual assets (figures, open-access journals)
+    _OA_JOURNALS = {"nature", "science", "n engl j med"}
     ranked = sorted(articles, key=lambda a: (
-        len(a.get("abstract", "")) > 100,
-        len(a.get("figure_urls", [])) > 0,
+        len(a.get("figure_urls", [])),               # most figures first
+        a.get("journal", "").lower() in _OA_JOURNALS, # open-access friendly
+        len(a.get("abstract", "")) > 100,             # has real abstract
+        len(a.get("abstract", "")),                    # longer abstract better
     ), reverse=True)
     article = ranked[0]
 
@@ -26,7 +30,7 @@ def write_reel(articles: list[dict]) -> tuple[dict, list[dict]]:
     client = genai.Client(api_key=api_key)
     abstract = article.get("abstract", "")[:2000]
 
-    prompt = f"""You are a science communicator creating an Instagram Reel script about a major research breakthrough.
+    prompt = f"""You write punchy Instagram Reel scripts about real research papers. Style: confident, clear, slightly dramatic. Like a smart friend explaining a paper at a bar.
 
 ARTICLE:
 Title: {article.get('title', 'Unknown')}
@@ -34,29 +38,31 @@ Journal: {article.get('journal', '')}
 Authors: {article.get('authors', '')}
 Abstract: {abstract}
 
-Generate a JSON array of 6 scenes for a 50-second reel. Each scene is narrated over ~8 seconds.
+Return a JSON array of 6 scenes. Each scene = 1 spoken sentence over ~8 seconds.
 
-Each scene must have:
-- "text": narration text in English. SHORT: 12-20 words max per scene. 1 sentence only.
-- "image_query": 2-4 word Unsplash search query (e.g. "brain MRI scan", "lab microscope"). SHORT, no sentences.
+Fields per scene:
+- "text": spoken narration. 12-18 words MAX. One sentence. Must be COMPLETE (no cut-offs).
+- "image_query": 2-4 word Unsplash search (e.g. "brain MRI scan", "lab microscope", "DNA helix close").
 - "type": one of "hook", "background", "method", "finding", "impact", "cta"
 
-Structure:
-1. HOOK: A bold, specific statement. Lead with a number or surprising fact. Name the subject.
-2. BACKGROUND: What gap in knowledge did researchers address? Be concrete.
-3. METHOD: Name the technique. One sentence, simplified but specific.
-4. FINDING: The key result. Include a number or magnitude. This is the climax.
-5. IMPACT: Who benefits? What changes? One concrete implication.
-6. CTA: "Follow for more on [specific topic]."
+Scene structure:
+1. HOOK: Start with a number or surprising fact. Name the subject. Create tension.
+   BAD: "A groundbreaking study reveals new insights about cancer."
+   GOOD: "Over 1800 patients just changed everything we know about stroke treatment."
+2. BACKGROUND: What was the unsolved problem? Be specific.
+   BAD: "Researchers tackled an important question."
+   GOOD: "Patients with severe brain damage were denied clot removal — until now."
+3. METHOD: Name the actual technique. One line.
+4. FINDING: The key result with a number. This is the climax.
+5. IMPACT: One concrete consequence. Who benefits and how.
+6. CTA: "Follow for more on [2-word topic]."
 
-CRITICAL RULES:
-- Third person only. Say "researchers found" or "the team discovered", NEVER "we".
-- 12-20 words per scene, never more. Short punchy sentences.
-- Every sentence must be COMPLETE. Never cut mid-phrase.
-- Active voice. Specific. No generic platitudes.
-- No jargon without context. Use proper scientific terms briefly explained.
+Rules:
+- Third person ONLY. "Researchers found", never "we found".
+- Active voice. Specific nouns and verbs. Zero filler words.
+- If the abstract has numbers, USE them in hook or finding.
 
-Return ONLY the JSON array, no markdown."""
+Return ONLY valid JSON, no markdown fences."""
 
     for attempt in range(3):
         try:

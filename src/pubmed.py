@@ -33,7 +33,7 @@ def gather_all(days_back: int = 0) -> list[dict]:
     base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
     if days_back == 0:
-        days_back = int(os.environ.get("PUBMED_DAYS_BACK", "7"))
+        days_back = int(os.environ.get("PUBMED_DAYS_BACK", "14"))
 
     date_from = (datetime.now() - timedelta(days=days_back)).strftime("%Y/%m/%d")
     date_to = datetime.now().strftime("%Y/%m/%d")
@@ -45,10 +45,11 @@ def gather_all(days_back: int = 0) -> list[dict]:
     )
 
     try:
-        # Search
+        # Search — relevance sort to get mix of journals
         resp = _get_with_retry(f"{base}/esearch.fcgi", params={
-            "db": "pubmed", "term": query, "retmax": 20,
+            "db": "pubmed", "term": query, "retmax": 40,
             "retmode": "json", "email": email,
+            "sort": "relevance",
         })
         resp.raise_for_status()
         ids = resp.json().get("esearchresult", {}).get("idlist", [])
@@ -57,7 +58,7 @@ def gather_all(days_back: int = 0) -> list[dict]:
 
         # Summary (title, journal, authors, date)
         resp2 = _get_with_retry(f"{base}/esummary.fcgi", params={
-            "db": "pubmed", "id": ",".join(ids[:10]),
+            "db": "pubmed", "id": ",".join(ids[:20]),
             "retmode": "json", "email": email,
         })
         resp2.raise_for_status()
@@ -65,14 +66,14 @@ def gather_all(days_back: int = 0) -> list[dict]:
 
         # Abstracts (XML)
         resp3 = _get_with_retry(f"{base}/efetch.fcgi", params={
-            "db": "pubmed", "id": ",".join(ids[:10]),
+            "db": "pubmed", "id": ",".join(ids[:20]),
             "rettype": "abstract", "retmode": "xml", "email": email,
         }, timeout=20)
         abstracts = _parse_abstracts(resp3.text) if resp3.status_code == 200 else {}
         dois = _parse_dois(resp3.text) if resp3.status_code == 200 else {}
 
         articles = []
-        for pmid in ids[:10]:
+        for pmid in ids[:20]:
             info = summary.get(pmid, {})
             authors = info.get("authors", [])
             author_names = [a.get("name", "") for a in authors[:3]]
@@ -92,8 +93,8 @@ def gather_all(days_back: int = 0) -> list[dict]:
                 "figure_urls": [],
             })
 
-        # Fetch PMC figures + PMCID for top articles
-        for art in articles[:5]:
+        # Fetch PMC figures + PMCID for all articles
+        for art in articles:
             pmcid, figs = _fetch_pmc_figures_and_id(art["pmid"], email)
             art["figure_urls"] = figs
             art["pmcid"] = pmcid
